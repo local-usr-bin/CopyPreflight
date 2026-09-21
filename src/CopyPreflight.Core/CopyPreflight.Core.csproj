@@ -6,4 +6,13 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      The scanner's directory-listing seam is internal on purpose: it is not product API. Tests need
+      to reach it to exercise failure handling without changing directory ACLs, which this
+      repository does not do. No other type is exposed by this.
+    -->
+    <InternalsVisibleTo Include="CopyPreflight.Tests" />
+  </ItemGroup>
+
 </Project>

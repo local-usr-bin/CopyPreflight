@@ -76,7 +76,8 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 依赖方向单向指向 Core。Core 保持与 UI 技术无关，从而使扫描与规则逻辑可以在没有 UI 的情况下被测试。
 
-> M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1）。
+> M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1），
+> M2 确定了源扫描器的公开契约与结果模型（见 §4.2）。
 
 ## 4. 本阶段已确定 / 未确定的事
 
@@ -95,15 +96,37 @@ M1 建立了后续 scanner、target probing 与 rules 共用的最小领域模�
 
 `FileSystemName` 采用**开放**表达（规范化字符串 + 大小写不敏感比较），因为文件系统名称不是封闭集合。
 
-### 4.2 仍未确定
+### 4.2 M2 已确定：源扫描器契约
+
+M2 实现了 §1.1 的第一版真实扫描器。它仍然是纯观察层：只读、不判断、不探测目标。
+
+| 职责 | 类型 | 语义 |
+| --- | --- | --- |
+| 1.1 source inventory | `SourceScanner` | 接受 source root，递归观察出 inventory、issue 与统计；同步、可取消、可报告进度 |
+| 1.1 source inventory | `SourceScanResult` | 观察结果：entries、issues，以及**由 entries 推导**的文件 / 目录 / reparse point 计数与逻辑字节数 |
+| 1.1 source inventory | `SourceScanProgress` | 单调、非负的进度快照；只含已观察计数与当前相对路径，无百分比 / ETA |
+| 1.1 source inventory | `SourceScanIssue`、`SourceScanIssueKind` | **观察失败的事实**，与 `Finding` 分开：无 Severity、无建议 |
+| 1.1 source inventory | `InvalidSourceRootException`、`InvalidSourceRootReason` | source root 不可用时的可预期失败（不存在 / 不是目录） |
+
+关键边界：
+
+- `SourceScanIssue` 不是 `Finding`。扫描器只记录"我观察不到这里"，不做 Error / Warning / Info 判定。
+- 取消**不**被转换成一个看起来成功的 partial result；它传播 `OperationCanceledException`。
+- reparse point 只被记录为"遇到了 reparse point"：不进入、不解析 target、不分类、不归因长度。
+- 遍历使用显式 stack 与逐目录惰性枚举，不依赖枚举顺序，也不做预扫描计数。
+- 统计由 entries 推导，保证 summary 与 inventory 不可能不一致。
+
+完整的扫描器契约（路径语义、统计恒等式、错误策略、reparse 边界、进度与取消）见
+[`SCANNER.md`](SCANNER.md)。
+
+### 4.3 仍未确定
 
 为避免过度设计，以下内容仍然**不予确定**，留待有真实需求驱动的里程碑：
 
 - 规则的执行接口与注册方式（RuleEngine / registry / discovery / plugin）
 - 具体规则的实现（FAT32 单文件上限、空间、路径长度、文件名合法性、冲突等）
 - 目标能力探测（target probing）的具体实现方式
-- 扫描器的调度与并发模型
-- 进度与取消的具体机制（抽象形态）
 - findings 的展示形式与序列化方式
+- 扫描器在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
 
 这些应在有真实需求驱动时再确定，避免在缺乏事实的情况下把接口设计死。

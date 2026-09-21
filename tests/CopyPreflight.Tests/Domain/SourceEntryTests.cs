@@ -56,6 +56,7 @@ public class SourceEntryTests
     {
         Assert.Throws<ArgumentException>(() => { _ = SourceEntry.File(path!, 1L); });
         Assert.Throws<ArgumentException>(() => { _ = SourceEntry.Directory(path!); });
+        Assert.Throws<ArgumentException>(() => { _ = SourceEntry.ReparsePoint(path!, SourceEntryKind.File); });
     }
 
     [Fact]
@@ -64,5 +65,43 @@ public class SourceEntryTests
         Assert.Equal(SourceEntry.File("a.txt", 3L), SourceEntry.File("a.txt", 3L));
         Assert.NotEqual(SourceEntry.File("a.txt", 3L), SourceEntry.File("a.txt", 4L));
         Assert.NotEqual(SourceEntry.File("a", 0L), SourceEntry.Directory("a"));
+    }
+
+    [Fact]
+    public void RegularEntriesAreNotReparsePoints()
+    {
+        Assert.False(SourceEntry.File("a.txt", 1L).IsReparsePoint);
+        Assert.False(SourceEntry.Directory("a").IsReparsePoint);
+    }
+
+    [Theory]
+    [InlineData(SourceEntryKind.File)]
+    [InlineData(SourceEntryKind.Directory)]
+    public void ReparsePointKeepsItsShapeButAttributesNoLength(SourceEntryKind kind)
+    {
+        var entry = SourceEntry.ReparsePoint(@"sub\link", kind);
+
+        Assert.Equal(@"sub\link", entry.RelativePath);
+        Assert.Equal(kind, entry.Kind);
+        Assert.True(entry.IsReparsePoint);
+
+        // Neither a fabricated zero nor a guessed target size: the length is simply not attributed.
+        Assert.Null(entry.LengthInBytes);
+    }
+
+    [Fact]
+    public void ReparsePointIsNotEqualToARegularEntryOfTheSameShape()
+    {
+        Assert.NotEqual(SourceEntry.Directory("a"), SourceEntry.ReparsePoint("a", SourceEntryKind.Directory));
+        Assert.Equal(
+            SourceEntry.ReparsePoint("a", SourceEntryKind.Directory),
+            SourceEntry.ReparsePoint("a", SourceEntryKind.Directory));
+    }
+
+    [Fact]
+    public void ReparsePointRejectsAnUnknownShape()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => { _ = SourceEntry.ReparsePoint("a", (SourceEntryKind)42); });
     }
 }

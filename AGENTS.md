@@ -42,6 +42,9 @@ dotnet test CopyPreflight.sln
 - 解决方案使用**经典 `.sln`**。`dotnet new sln` 在 .NET 10 默认生成 `.slnx`，新增项目请显式使用 `-f sln`。
 - 新增/删除项目后，必须同步 `CopyPreflight.sln` 并重新完整 build + test。
 - 测试必须能在**无人值守**下运行通过（不允许需要人工点击的步骤）。
+- 测试**不得**要求管理员权限、Developer Mode、ACL 修改、注册表修改或其他系统设置变更。
+  需要"访问被拒绝"或"遇到 reparse point"这类条件时，优先使用真实但无需提权的手段
+  （例如目录 junction），否则在 Core 内留一个极小的内部 seam，而不是改动测试机配置。
 - 一个里程碑完成前，必须运行完整 build 与 test，并检查 `git status` 与改动范围。
 
 ## 4. 编码约定
@@ -59,6 +62,8 @@ dotnet test CopyPreflight.sln
 Web 框架、AI API、原生依赖包、打包框架。
 
 - 测试框架属于正常工程依赖，可使用标准成熟模板。
+- **不为测试引入 mock 文件系统依赖**（例如 `System.IO.Abstractions`），也不因此建立 virtual file system。
+  需要可控的 I/O 边界时，在 Core 内用一个极小的 `internal` 抽象加 `InternalsVisibleTo` 即可。
 - 需要新增任何依赖前，先说明必要性并取得确认；不要静默添加。
 
 ## 6. 产品边界（写代码时最容易违反的部分）
