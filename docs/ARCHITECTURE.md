@@ -76,16 +76,34 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 依赖方向单向指向 Core。Core 保持与 UI 技术无关，从而使扫描与规则逻辑可以在没有 UI 的情况下被测试。
 
-> M0 只固定了"Core 不依赖 UI"这一条方向性约束。各职责在 Core 内部的具体命名空间、类型划分与接口设计**留待后续里程碑**决定。
+> M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1）。
 
-## 4. 明确不在本阶段决定的事
+## 4. 本阶段已确定 / 未确定的事
 
-为避免过度设计，以下内容在 M0 **不予确定**：
+### 4.1 M1 已确定：最小核心领域模型
 
-- 具体 class / record / interface 的定义与命名
-- 规则的注册与组织方式
+M1 建立了后续 scanner、target probing 与 rules 共用的最小领域模型。所有类型都位于 `CopyPreflight.Core`
+程序集；`Findings/`、`Capabilities/`、`Domain/` 目录只用于组织文件，命名空间仍与程序集同名。
+
+| 职责 | 类型 | 语义 |
+| --- | --- | --- |
+| 1.4 findings | `Finding`、`FindingCode`、`Severity` | 可解释的结论单元：code / severity / title / explanation / impact / recommendation / 可选 source relative path |
+| 1.2 target capability discovery | `CapabilityValue<T>`、`FileSystemName`、`TargetCapabilities` | 能力要么「已知」要么「显式 Unknown」；Unknown 不得退化成 `default(T)`、`false`、`0` 或空字符串 |
+| 1.1 source inventory | `SourceEntry`、`SourceEntryKind` | 最小事实模型：relative path、kind，以及文件的逻辑长度（目录不伪造长度） |
+
+这些类型都是**纯数据模型**：不做文件系统 I/O、不调用 Win32、不依赖 WPF、不持有 UI 类型。
+
+`FileSystemName` 采用**开放**表达（规范化字符串 + 大小写不敏感比较），因为文件系统名称不是封闭集合。
+
+### 4.2 仍未确定
+
+为避免过度设计，以下内容仍然**不予确定**，留待有真实需求驱动的里程碑：
+
+- 规则的执行接口与注册方式（RuleEngine / registry / discovery / plugin）
+- 具体规则的实现（FAT32 单文件上限、空间、路径长度、文件名合法性、冲突等）
+- 目标能力探测（target probing）的具体实现方式
 - 扫描器的调度与并发模型
 - 进度与取消的具体机制（抽象形态）
-- findings 的数据承载形式与序列化方式
+- findings 的展示形式与序列化方式
 
 这些应在有真实需求驱动时再确定，避免在缺乏事实的情况下把接口设计死。
