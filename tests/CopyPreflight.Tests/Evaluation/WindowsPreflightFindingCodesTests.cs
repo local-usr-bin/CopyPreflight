@@ -27,6 +27,14 @@ public class WindowsPreflightFindingCodesTests
         "TARGET_NAME_RESERVED_DEVICE",
         "TARGET_NAME_TRAILING_SPACE_OR_PERIOD",
         "SOURCE_CASE_COLLISION_RISK",
+        "TARGET_EXISTING_FILE_COLLISION",
+        "TARGET_EXISTING_TYPE_COLLISION",
+        "TARGET_EXISTING_REPARSE_POINT",
+        "SOURCE_REPARSE_POINT_WITH_EXISTING_TARGET_OBJECT",
+        "TARGET_EXISTING_OBJECT_CHECK_FAILED",
+        "TARGET_EXISTING_OBJECT_COVERAGE_INCOMPLETE",
+        "TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED",
+        "TARGET_EXISTING_OBJECT_CHECK_CANCELLED",
     ];
 
     [Fact]
@@ -127,5 +135,63 @@ public class WindowsPreflightFindingCodesTests
                 CapabilityValue<FileSystemName>.Known(new FileSystemName("FAT32")),
                 CapabilityValue<long>.Known(1024),
                 CapabilityValue<int>.Known(8)));
+
+        // The existing-object milestone: what the destinations already hold, together with the two ways
+        // a check that ran can still leave part of the inventory uncovered.
+        yield return PreflightInputs.Evaluate(
+            PreflightInputs.Source(
+                SourceEntry.File("collision.txt", 1),
+                SourceEntry.File(@"dir\blocked.txt", 1),
+                SourceEntry.File("reparse", 1),
+                SourceEntry.ReparsePoint("source-link", SourceEntryKind.Directory),
+                SourceEntry.File("denied.txt", 1),
+                SourceEntry.File(@"boundary\inside.txt", 1)),
+            PreflightInputs.HealthyTarget(),
+            ExistingObjectInputs.ProbeResult(
+                ExistingObjectObservation.Observed(
+                    "collision.txt",
+                    ExistingObjectInputs.Mapped("collision.txt"),
+                    TargetObjectPresence.File,
+                    "Scripted observation."),
+                ExistingObjectObservation.Observed(
+                    @"dir\blocked.txt",
+                    ExistingObjectInputs.Mapped(@"dir\blocked.txt"),
+                    TargetObjectPresence.Directory,
+                    "Scripted observation."),
+                ExistingObjectObservation.Observed(
+                    "reparse",
+                    ExistingObjectInputs.Mapped("reparse"),
+                    TargetObjectPresence.ReparsePoint,
+                    "Scripted observation."),
+                ExistingObjectObservation.Observed(
+                    "source-link",
+                    ExistingObjectInputs.Mapped("source-link"),
+                    TargetObjectPresence.File,
+                    "Scripted observation."),
+                ExistingObjectObservation.CheckFailed(
+                    "denied.txt",
+                    ExistingObjectInputs.Mapped("denied.txt"),
+                    ScriptedFileSystemApi.ErrorAccessDenied,
+                    "Scripted failure."),
+                ExistingObjectObservation.NotQueried(
+                    @"boundary\inside.txt",
+                    ExistingObjectGapReason.BlockedByReparsePoint,
+                    "boundary",
+                    nativeErrorCode: null,
+                    "Scripted boundary.",
+                    ExistingObjectInputs.Mapped(@"boundary\inside.txt"))));
+
+        // A cancelled run is a state of its own: not a completed check, and not an ordinary failure.
+        yield return PreflightInputs.Evaluate(
+            PreflightInputs.Source(SourceEntry.File("never-reached.txt", 1)),
+            PreflightInputs.HealthyTarget(),
+            ExistingObjectInputs.CancelledProbeResult(
+                ExistingObjectObservation.NotQueried(
+                    "never-reached.txt",
+                    ExistingObjectGapReason.Cancelled,
+                    blockingAncestorRelativePath: null,
+                    nativeErrorCode: null,
+                    "Scripted cancellation.",
+                    ExistingObjectInputs.Mapped("never-reached.txt"))));
     }
 }

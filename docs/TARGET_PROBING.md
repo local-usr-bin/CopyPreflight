@@ -1,9 +1,12 @@
-# CopyPreflight — 目标能力探测契约（M3）
+# CopyPreflight — 目标能力探测契约（M3 / M6）
 
-> 本文件记录 M3 实现的目标能力探测（target capability probing）的**行为契约**：它问 Windows 什么、
-> 如何表达回答、以及在问不到时如何诚实报告。
+> 本文件记录目标探测的**行为契约**：它问 Windows 什么、如何表达回答、以及在问不到时如何诚实报告。
 > 它不改变 [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md) 的产品范围，只把目标探测这一层的语义写清楚。
-> 状态：**M3 已冻结**。
+> 状态：**M3（能力探测）与 M6（已存在对象探测）均已冻结。**
+>
+> - §1–§12 描述 M3 的能力探测（`WindowsTargetCapabilityProbe`）。
+> - §13 描述 M6 新增的已存在对象探测（`WindowsTargetExistingObjectProbe`），它与能力探测并列、
+>   同样只读、同样不产出 `Finding`。
 
 ## 1. 职责
 
@@ -194,6 +197,9 @@ Microsoft 的 `GetFileAttributesW` 文档明确说明：直接对 network share 
 
 **真正的写入能力没有通过任何写操作验证过。** 任何文档、UI 文案或结论都不得超出这一范围。
 
+**M6 的已存在对象探测遵守同一条只读边界**（见 §13.7）：它只调用只读的属性查询，同样**不**创建、
+**不**写入、**不**删除、**不**重命名、**不**改权限、**不**读取任何文件内容。
+
 ## 8. Issue 模型
 
 `TargetProbeIssue` 表达**探测失败的事实**，与 `Finding` 严格分开：没有 `Severity`、没有标题、没有建议。
@@ -246,10 +252,110 @@ issue **不**长期保存异常对象，也**不**替代 capability 值：查询
 - 完整目标路径长度 / `MAX_PATH` 规则
 - 单组件长度违规判定
 - 文件名合法性 / 保留名称规则
-- 目标已有对象冲突、file ↔ directory 类型冲突
 - 元数据丢失规则
 - 生成任何 `Finding`
 - 枚举系统全部 volume、WMI、物理磁盘型号 / 序列号
+
+> **目标已有对象冲突、file ↔ directory 类型冲突**原本列在这里，现已由 **M6** 实现（见 §13）。
+> M6 实现的是"目标位置是否已被占用、被什么种类占用"的**只读观测**；它仍然**不**做
+> overwrite / skip 策略、目标内容比较、按已存在目标文件扣减空间、目标大小写敏感性探测。
+
+## 13. 目标已存在对象的只读探测（M6）
+
+M6 在**同一个 Windows 层**新增了一个只读探测器 `WindowsTargetExistingObjectProbe`，回答第二个问题：
+
+> **"按 `source\<relative-path> → target\<relative-path>` 这个固定映射，每个源对象的目标位置上
+> 当前已有什么？"**
+
+它与 M3 的能力探测器一致：**不产生 `Finding`**、不带 `Severity`、不生成面向用户的建议。它只产出事实——
+`TargetExistingObjectProbeResult`，其中每个 source entry 对应一条 `ExistingObjectObservation`。
+判断"这意味着 Error / Warning / Info"仍属于规则层（见 [`RULES.md`](RULES.md) §4.12）。
+
+### 13.1 映射与查询范围
+
+- 映射固定为 `Path.Join(targetDirectoryPath, relativePath)`。**不**在目标下再加一层源目录名，
+  **不**通过改变映射来消解冲突。
+- 只查询**每个 entry 自己的映射位置**以及**其所需祖先**；**不**递归扫描整个目标、**不**枚举无关目标内容、
+  **不**重新扫描源。
+- **父先于子**：即使 inventory 的到达顺序被打乱，也先解析所需祖先、再解析 leaf，因此结论与到达顺序无关。
+- 一次运行内按**原始路径字符串 `Ordinal`** 缓存已解析的位置；**不**合并仅大小写不同的映射。
+- 所需祖先可以包含**不在 inventory 里**的中间目录——它们是为解析映射而查询的，不影响映射本身。
+
+### 13.2 事实模型
+
+| `ExistingObjectObservationKind` | 含义 |
+| --- | --- |
+| `Observed` | 查询了该位置，那里有一个对象；`Presence` 说明是 File / Directory / ReparsePoint |
+| `ObservedMissing` | 查询了该位置，**有直接证据**表明当前没有对象 |
+| `InferredMissing` | 未查询该位置，但**已确证某个祖先缺失**，因此该位置不可能有对象——是**推导**，不是观测 |
+| `CheckFailed` | 查询了该位置，但 Windows 没有作答 |
+| `NotQueried` | 有意未查询；`GapReason` 说明原因 |
+
+- **直接确证缺失（D）与由缺失祖先推出（E）分开表达**，两者都**不**伪装成"逐位置查询成功"。
+- `Presence` **仅在 `Observed` 时非 null**；其余 kind 都没有对象可描述。
+- **reparse point 先于目录判定**：一个 junction 同时带 `Directory` 与 `ReparsePoint` 属性，
+  这里只记录 `ReparsePoint` 这一事实，**不分类**（symlink / junction / mount point / other）、
+  **不解析 target**、**不跟随**。
+- 每条观测保留证据：source relative path、被检查的映射位置、直接还是祖先推导、失败或跳过原因、
+  适用的**原始 Win32 错误码**、阻塞祖先。**未查询**的项**不**伪造错误码。
+- `MappedTargetPath` 永远是**映射位置**（`Path.Join` 的结果），**绝不**是内部查询形式。
+
+### 13.3 读取方式与错误处理
+
+- 用 `GetFileAttributesW`（复用 M3 已有的 `IWindowsFileSystemApi` seam，不新增 interop）。
+- **先**分支"成功 vs `INVALID_FILE_ATTRIBUTES`"。**禁止**用
+  `File.Exists == false && Directory.Exists == false` 作为"不存在"的证据。
+- **只有 `ERROR_FILE_NOT_FOUND`(2)** 在"路径语义可靠且没有祖先阻断"时算作**缺失证据**。
+  `ERROR_PATH_NOT_FOUND`(3) **不**无条件等于 leaf 缺失——它也可能是中间组件不存在。
+- 访问被拒绝 / 共享冲突 / 网络错误 → **Unknown**（`CheckFailed`），事实不退化成"不存在"。
+- 非法名称 / 超出长度 → **不是** Missing（属于无法按该名称查询，记覆盖缺口）。
+- 只处理本层**明确知道如何解释**的路径 / 文件系统失败；**不**用大范围 catch 把取消或编程错误
+  变成 Missing（与 §10 同一原则）。
+
+### 13.4 父路径、分支与 UNC
+
+- 所需祖先逐级判定：**普通目录 → 继续**；**是普通文件 → 结构性阻断，停止该分支**，根因出在该祖先处，
+  其后代记录"被哪个祖先把分支挡住"；**已确证缺失的祖先 → 推导整支缺失**；
+  **reparse 祖先 → 记录边界、停止、不解析**；**祖先检查失败 → Unknown 并停止该分支**。
+- 被阻断分支里的后代**永不**默认成 Missing，而是保留"阻塞祖先 + 原因"。
+- **互不依赖的分支继续**：一个分支失败不会让其他分支停摆。
+- **UNC share root 保留 M3 的边界**：Microsoft 文档化的 `ERROR_BAD_NETPATH`(53) **不得**变成一道闸门——
+  既**不**断言共享不存在，也**不**因此停止其下的子项；具体子项各自由自己的查询结果判定。
+  **并非所有网络错误都是 share-root 例外**：share root 之下的一个真实网络失败仍然保持 Unknown。
+- 一项 capability 为 Unknown（例如 `FileSystemName`）**不**阻断本探测；
+  `GetVolumePathNameW` 成功**不**证明任何东西存在。
+
+### 13.5 名称与长路径
+
+- 保留**原始** `SourceEntry.RelativePath` 与目标根；**不** trim、**不**替换、
+  **不**"归一化之后再查询"。查询的位置要么就是映射表达的位置，要么观测明确说"没有查询"。
+- 非法字符 / 保留设备名 / 结尾空格或句点：保留 **M5 的 Finding**，本探测只记录"M6 未覆盖 + 原因"
+  （`AmbiguousName`），**不**把 `report.` 归一化成 `report` 再查询。
+- 长路径：语义明确的路径用**适当的内部查询形式**（extended-length；UNC 与盘符分别处理）。
+  **不**机械加前缀、**不**改变语义、**不**重复前缀；`\\.\` ≠ `\\?\`；
+  **绝不**把内部查询形式写回成原始目标路径。真正超出范围 → Unknown / 覆盖缺口，**不是** Missing。
+  查询成功也**不**意味着其他工具不受 `MAX_PATH` 限制。
+
+### 13.6 覆盖与取消
+
+- `TargetExistingObjectProbeOutcome`：`NotPerformed` / `Completed` / `CompletedWithCoverageGaps` / `Cancelled`。
+- 批量结果必须能区分"未执行 / 完成且完整覆盖 / 完成但有缺口 / 已取消"。
+  **空结果集 ≠ 检查完整**；**取消的项永不默认成 Missing**；M6 的覆盖 ≠ M2 的完整枚举。
+- 取消遵循仓库既有模式：在入口与祖先边界检查 `CancellationToken`，传播 `OperationCanceledException`；
+  **不**承诺中断阻塞中的 native 调用，**不**把取消吞成"完成"，也**不**起后台线程。
+- 本层**不**承诺原子性 / 并发安全，也不做并发探测或重试风暴。
+
+### 13.7 只读边界
+
+与 M3 相同（见 §7）：**只读**。不复制、不移动、不删除、不重命名、不改权限、
+**不**在源目录或目标目录写入任何 probe / 临时文件、**不**读取任何文件的内容、**不**计算 hash。
+
+### 13.8 与规则层的关系
+
+- 本层**不**决定 Severity，**不**产出 `Finding`。它把事实交给 `WindowsPreflightEvaluator`
+  （经 `TargetExistingObjectRule`，见 [`RULES.md`](RULES.md) §4.12）。
+- 逐项结果**不**放进 `TargetCapabilities` 的三项（`FileSystemName` / `AvailableFreeBytes` /
+  `MaxPathComponentLength`）里；它们是与 capability 无关的另一类事实。
 - NTFS feature flags（sparse / compression / encryption 等）
 - 目标可写性验证
 - WPF 集成

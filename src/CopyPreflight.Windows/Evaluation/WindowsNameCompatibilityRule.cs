@@ -103,7 +103,7 @@ internal static class WindowsNameCompatibilityRule
                 yield return CreateReservedDeviceFinding(entry.RelativePath, leafName, deviceName);
             }
 
-            if (leafName[^1] is ' ' or '.')
+            if (EndsWithSpaceOrPeriod(leafName))
             {
                 yield return CreateTrailingCharacterFinding(entry.RelativePath, leafName);
             }
@@ -112,10 +112,18 @@ internal static class WindowsNameCompatibilityRule
 
     /// <summary>The reserved device name the leaf name stands for, or <see langword="null"/>.</summary>
     /// <remarks>
+    /// <para>
     /// Only the base portion — everything before the <i>first</i> period — is matched, because that
     /// is the part Windows compares, which is exactly why an extension cannot release the name.
+    /// </para>
+    /// <para>
+    /// Visible to the assembly rather than private so that the existing-object check can ask the same
+    /// question about a name before deciding whether it can be queried as written. That check must not
+    /// keep a second list of reserved names, which would be free to drift away from this one; it only
+    /// reads this judgement, and the Error this rule reports for such a name is unchanged.
+    /// </para>
     /// </remarks>
-    private static string? ReservedDeviceNameIn(string leafName)
+    internal static string? ReservedDeviceNameIn(string leafName)
     {
         var firstPeriod = leafName.IndexOf('.');
 
@@ -131,11 +139,25 @@ internal static class WindowsNameCompatibilityRule
         return ReservedDeviceNames.TryGetValue(baseName, out var deviceName) ? deviceName : null;
     }
 
+    /// <summary>Whether the name ends with a space or a period.</summary>
+    /// <remarks>
+    /// Only the last character is examined: <c>.temp</c>, <c>file.txt</c> and <c>file name.txt</c> are
+    /// ordinary names. Reused by the existing-object check, which cannot query such a name as written
+    /// because Windows itself would silently drop the trailing character.
+    /// </remarks>
+    internal static bool EndsWithSpaceOrPeriod(string name)
+        => name.Length > 0 && name[^1] is ' ' or '.';
+
     /// <summary>
     /// The distinct offending characters of the name, in ascending code-unit order so that the text
     /// of the finding depends only on the name.
     /// </summary>
-    private static IReadOnlyList<char> InvalidCharactersIn(string leafName)
+    /// <remarks>
+    /// Visible to the assembly rather than private for the same reason as
+    /// <see cref="ReservedDeviceNameIn"/>: the existing-object check reuses this judgement instead of
+    /// holding a second copy of the character set.
+    /// </remarks>
+    internal static IReadOnlyList<char> InvalidCharactersIn(string leafName)
     {
         var found = new SortedSet<char>();
 

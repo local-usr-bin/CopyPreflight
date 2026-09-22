@@ -1,11 +1,13 @@
-# CopyPreflight — 规则评估契约（M4 / M5）
+# CopyPreflight — 规则评估契约（M4 / M5 / M6）
 
-> **状态：M4 与 M5 契约已冻结。** 本文件记录规则层当前**实际实现**的规则：它们的输入、Severity、
+> **状态：M4、M5 与 M6 契约已冻结。** 本文件记录规则层当前**实际实现**的规则：它们的输入、Severity、
 > 触发条件、边界，以及为什么某些结论只能是 Warning 或 Info。它不描述产品范围（见
 > [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)），也不描述各层职责（见 [`ARCHITECTURE.md`](ARCHITECTURE.md)）。
 
 规则层是唯一把 source facts 与 target capabilities 组合起来判断的地方。M4 是它第一次真正产出
-用户可见的 `Finding`；M5 在其中加入了 Windows 命名兼容性规则，而规则层仍然是纯计算。
+用户可见的 `Finding`；M5 在其中加入了 Windows 命名兼容性规则，M6 又加入了"目标已存在对象 /
+碰撞"这一组规则；而规则层仍然是纯计算。M6 的观测事实由 [`TARGET_PROBING.md`](TARGET_PROBING.md)
+描述的只读探测产出，规则层只消费它，不自己做任何 I/O。
 
 ## 1. 位置与依赖
 
@@ -22,13 +24,22 @@
 public sealed class WindowsPreflightEvaluator
 {
     public IReadOnlyList<Finding> Evaluate(SourceScanResult source, TargetProbeResult target);
+    public IReadOnlyList<Finding> Evaluate(
+        SourceScanResult source,
+        TargetProbeResult target,
+        TargetExistingObjectProbeResult? existingObjects);
 }
 ```
 
+- 两参数重载等价于 `existingObjects: null`。**`null` 不是"目标上什么都没有"**，而是"没有做过这项检查"，
+  因此会产出一条 `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED`（Info，见 §4.12）。省略检查绝不能
+  与"检查通过、目标干净"混为一谈——这正是 M6 引入三参数重载的原因。
 - **纯计算、同步、无状态**：不进行任何文件系统 I/O，不重新扫描源，不重新探测目标，
   不检查 `target\relative-path` 是否存在，不修改任何东西。同一实例可重复使用。
+  目标上已有什么，是**由完成观测的一方作为事实传进来**的（`TargetExistingObjectProbeResult`）。
 - 相同输入必然产生相同输出。
-- 输入为 `null` → `ArgumentNullException`。
+- 输入为 `null`（`source` / `target`）→ `ArgumentNullException`。`existingObjects == null` 是合法输入，
+  它表达"未做检查"，不是错误。
 - 空结果的含义永远是 **"No known blocking issue was detected."**，绝**不是** "复制一定会成功"。
 - 返回序列的**顺序不是产品契约**（见 §6）。展示层可以按 Severity / code / path 自行排序。
 
@@ -65,8 +76,16 @@ leaf name 与 parent directory）。它只是字符串切分，**不是**路径�
 | `TargetNameReservedDevice` | `TARGET_NAME_RESERVED_DEVICE` |
 | `TargetNameTrailingSpaceOrPeriod` | `TARGET_NAME_TRAILING_SPACE_OR_PERIOD` |
 | `SourceCaseCollisionRisk` | `SOURCE_CASE_COLLISION_RISK` |
+| `TargetExistingFileCollision` | `TARGET_EXISTING_FILE_COLLISION` |
+| `TargetExistingTypeCollision` | `TARGET_EXISTING_TYPE_COLLISION` |
+| `TargetExistingReparsePoint` | `TARGET_EXISTING_REPARSE_POINT` |
+| `SourceReparsePointExistingTargetObject` | `SOURCE_REPARSE_POINT_WITH_EXISTING_TARGET_OBJECT` |
+| `TargetExistingObjectCheckFailed` | `TARGET_EXISTING_OBJECT_CHECK_FAILED` |
+| `TargetExistingObjectCoverageIncomplete` | `TARGET_EXISTING_OBJECT_COVERAGE_INCOMPLETE` |
+| `TargetExistingObjectCheckNotPerformed` | `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED` |
+| `TargetExistingObjectCheckCancelled` | `TARGET_EXISTING_OBJECT_CHECK_CANCELLED` |
 
-这 16 个 code 被测试逐个钉住（`WindowsPreflightFindingCodesTests`），并且有一条测试证明
+这 24 个 code 被测试逐个钉住（`WindowsPreflightFindingCodesTests`），并且有一条测试证明
 **每一个声明出来的 code 都确实会被某条规则产出**。
 
 ## 4. 规则清单
@@ -291,20 +310,74 @@ M4 的 `\\?\` 判断（§4.6）只作用于**传统 `MAX_PATH` 兼容性**这一
   底层 namespace 能构造出什么，与用户把文件迁移到某处时会发生什么，是两件事。
 - 这三项名称检查**不读**目标、**不拼接**目标路径，因此即使目标被拒绝也照常产生（见 §6）。
 
+### 4.12 目标已存在对象 / 碰撞（M6）
+
+输入是探测层产出的 `TargetExistingObjectProbeResult`：它对每个 source entry 的映射位置给出一条
+`ExistingObjectObservation`（观测到的对象 / 已确证的缺失 / 由缺失祖先推出的缺失 / 检查失败 /
+未查询）。规则层**不做任何 I/O**，只把这些事实翻译成 finding。观测与"事实 / 覆盖"语义的完整
+定义见 [`TARGET_PROBING.md`](TARGET_PROBING.md)。
+
+映射固定为 `target\<source relative path>`（target 就是目标根，**不再**多一层源目录名；
+**不**通过改变映射来消解冲突）。找出对象**不是**碰撞结论：下面第一行只说明"该位置已被占用"。
+
+| 观测到的情形 | FindingCode | Severity |
+| --- | --- | --- |
+| 源文件 → 目标已存在文件 | `TARGET_EXISTING_FILE_COLLISION` | Warning |
+| 源目录 → 目标已存在目录 | ——（不产生） | —— |
+| 源文件 → 目标已存在目录 | `TARGET_EXISTING_TYPE_COLLISION` | Error |
+| 源目录 → 目标已存在文件 | `TARGET_EXISTING_TYPE_COLLISION` | Error |
+| 目标位置是 reparse point（源为普通文件 / 目录） | `TARGET_EXISTING_REPARSE_POINT` | Warning |
+| 源本身是 reparse point → 目标已存在普通文件 / 目录 | `SOURCE_REPARSE_POINT_WITH_EXISTING_TARGET_OBJECT` | Warning |
+| 目标根本身是 reparse point | `TARGET_EXISTING_REPARSE_POINT`（target-wide） | Warning |
+| 可靠证据表明该位置无对象（已确证 / 由缺失祖先推出） | ——（不产生） | —— |
+| 该位置的检查未作答 | `TARGET_EXISTING_OBJECT_CHECK_FAILED` | Warning |
+| 一次未覆盖全量的运行 | `TARGET_EXISTING_OBJECT_COVERAGE_INCOMPLETE`（一条汇总） | Info |
+| 整个检查未执行（未提供结果） | `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED` | Info |
+| 检查被取消 | `TARGET_EXISTING_OBJECT_CHECK_CANCELLED` | Info |
+
+关键语义：
+
+- **源目录 → 目标已存在目录不产生碰撞 finding**，而是继续按各自的映射检查其子项；**不**为每个已存在
+  目录出一条 Info（两个目录是合并而不是冲突）。
+- **类型冲突**（上表第 3、4 行）是 Error：它由对象**自身的种类**决定，不依赖任何复制程序假设——
+  在另一个对象占着该路径时，对象无法按映射到达那里。文本只说"当前精确映射在结构上被阻断，
+  必须先解决它"，**不**提出删除 / 改名 / 改路由，也**不**改变映射。
+- **reparse point 优先于普通矩阵**：目标位置是 reparse point 时，**不**把它当成普通文件或目录
+  参与上表的文件 / 目录判定，**不**猜它是 symlink / junction / mount point，**不**解析它的 target；
+  并且声明"其下对象依赖它指向哪里，本工具未检查"这一覆盖边界。
+- **源自身是 reparse point 时，不因源形状把冲突升级为精确 Error**：源 reparse 的迁移语义未定，
+  因此只报"映射位置已被占用"。M4 的源 reparse Warning（§4.7）**照常保留**（两者可同时出现）。
+- **有可靠证据表明无对象时，不产生碰撞 finding**，也**不**声称"目标可写"或"复制会成功"——"没找到"
+  不等于"不会失败"。
+- **检查失败时，事实保持 Unknown**：文本**不得**变成"目标不存在"或"无法写入"，并保留原始 Win32 错误码
+  作为与语言无关的证据（`GetFileAttributesW reported Windows error N`）。
+- **分支被阻断**（祖先已是普通文件 / 祖先检查失败 / 祖先为 reparse point）：根因只报一次，
+  **不**为每个 descendant 重复同一条 finding；受影响的子树由**一条** target-wide 覆盖汇总（Info）覆盖。
+- **目标根**：根是普通文件 → 与"目标无效"语义一致（blocking，见 §4.2）；根是 reparse point →
+  一条 target-wide Warning 并停止；根检查失败 → **不**为所有子项重复报告。
+- 只有**部分**位置被检查 → 一条 `TARGET_EXISTING_OBJECT_COVERAGE_INCOMPLETE`，说明被遗漏的**数量与原因**，
+  而不是每个受影响对象一条。空结果集 **不等于**"检查完整"；被取消的项**永不**被默认成"缺失"。
+- **本里程碑明确不做**：overwrite / skip / keep-both 策略、目标内容比较、按已存在目标文件扣减空间、
+  目标大小写敏感性探测、二阶大小写碰撞、reparse 分类 / 解析、ACL / ADS / 时间戳能力分析、
+  Unicode 归一化深度、8.3 别名、报告导出、最终 GUI。
+
 ## 5. 为什么这些结论停留在 Warning
 
-### 5.1 为什么可用空间规则当前只能是 Warning（M4）
+### 5.1 为什么可用空间规则当前只能是 Warning（M4；M6 之后仍然如此）
 
-这不是保守措辞，而是本轮**已知事实的上限**。M4 的规则层没有：
+这不是保守措辞，而是本轮**已知事实的上限**。空间规则至今没有：
 
-- target collision probing（目标是否已存在同名对象）
-- overwrite / skip 策略（复制程序会覆盖、跳过还是报错）
-- 已存在目标文件的分析
-- reparse point 的实际复制行为
-- sparse / compression 的真实分配语义（逻辑大小 ≠ 占用空间）
+- **overwrite / skip 策略**（复制程序会覆盖、跳过还是报错）——M6 只报告"该位置已被占用"，
+  并不决定会被覆盖，因此 **不**据此扣减空间需求
+- **已存在目标文件的分析**：M6 读了目标位置是否存在、是什么种类，**没有**读取任何文件内容或大小，
+  所以它不知道一个已存在的目标文件会占用多少、会不会被替换
+- **reparse point 的实际复制行为**
+- **sparse / compression 的真实分配语义**（逻辑大小 ≠ 占用空间）
 
 以上任何一项都可能显著改变真实的空间需求。在这些事实缺失时给出 Error，等于声称比已观测事实
-更强的确定性。等目标冲突分析完成后，可以再设计更确定的 Error 条件。
+更强的确定性。**M6 加入目标碰撞观测后，空间规则仍然只是 Warning**：知道"位置被占用"并不等于
+知道复制程序会不会覆盖它、也不等于知道已存在对象的大小，因此"按已存在目标文件扣减空间"
+被明确推迟（见 §10）。等这些事实补齐后，才可以再设计更确定的 Error 条件。
 
 ### 5.2 为什么仅大小写不同的名称碰撞只能是 Warning（M5）
 
@@ -335,16 +408,20 @@ M4 的 `\\?\` 判断（§4.6）只作用于**传统 `MAX_PATH` 兼容性**这一
 4. `SourceCaseCollisionRule` —— 源侧，始终执行（M5）
 5. `TargetPathBlockerRule` —— 若目标被拒绝，产出 blocking Error 后**立即返回**
 6. `TargetCapabilityCoverageRule` —— 仅目标可用时
-7. `Fat32MaxFileSizeRule`
-8. `TargetPathComponentRule`
-9. `TraditionalPathLengthRule`
-10. `TargetFreeSpaceRule`
+7. `TargetExistingObjectRule` —— 仅目标可用时（M6）
+8. `Fat32MaxFileSizeRule`
+9. `TargetPathComponentRule`
+10. `TraditionalPathLengthRule`
+11. `TargetFreeSpaceRule`
 
 分组依据是"这条规则是否依赖目标"：
 
 - **source-only** 规则（1–4）描述源自身的事实，目标如何都成立，**始终执行**。
-- **target-dependent** 规则（6–10）在目标被拒绝时**全部跳过**：在一个不能作为目标目录的路径下
+- **target-dependent** 规则（6–11）在目标被拒绝时**全部跳过**：在一个不能作为目标目录的路径下
   拼目标路径，或推演一个根本不会发生迁移的目标文件系统能力，都是在描述一件不会发生的事。
+  M6 的 `TargetExistingObjectRule` 属于这一组，因为它消费的是"目标位置上已有什么"这一目标侧事实。
+  当目标本身被拒绝时，已经产出的 blocking finding 已经说明"无法进行任何目标侧检查"，因此
+  目标已存在对象的覆盖情况**不**再叠加重复（见 §4.12）。
 
 **M5 的四条名称规则属于哪一组，是由"它是否消费目标事实"决定的，而不是由它的 code 前缀拼写决定的。**
 非法字符、保留设备名、结尾空格 / 句点描述的是**名称自身的属性**——它们既不读取任何一项 target
@@ -366,6 +443,13 @@ capability，也不拼接目标路径，因此在目标被拒绝时**仍然产�
   `TargetProbeIssue` 保留其技术诊断用途（kind / affected path / Win32 入口点名 / native error code），
   仍是可比较的普通值对象，供日志与后续里程碑使用。
 - 唯一的例外是 blocking 的两类，它们本身就是"目标不能用作目标"这一结论（§4.2）。
+- M6 的"检查失败"（`ExistingObjectObservation.CheckFailed`）遵循的是**另一条**原则，值得写清楚：
+  一个映射位置的属性查询没作答时，**会**为该位置产出一条 `TARGET_EXISTING_OBJECT_CHECK_FAILED`
+  （Warning，§4.12）。原因不是"把 Win32 错误直接抛给用户"，而是**事实不同**：M3 的一次查询失败只会让
+  *一项 capability* 变成 Unknown，而一项 capability 的 Unknown 已经由 coverage Info 完整表达；
+  但 M6 的失败是**针对一个具体映射位置**的，若只汇总成一条覆盖说明，用户就无法知道**是哪个位置**
+  没查成，而那正是他需要去确认的东西。两者都只陈述"事实仍是 Unknown"，都**不**退化成"不存在"，
+  文本也都**不**变成"无法写入"。
 
 ## 8. 文本语言与确定性
 
@@ -393,32 +477,57 @@ M5 **没有**改变这一点：名称规则与大小写碰撞规则只读 `Sourc
 既不检查目标对象是否存在，也不打开任何目标 handle，也没有引入 `TargetCollisionProbe` /
 `TargetEntryProbe` 这类东西。
 
+M6 **也没有**改变这一点：`TargetExistingObjectRule` 只消费传进来的 `TargetExistingObjectProbeResult`，
+不自己调用任何 Win32 API、不打开任何路径、不判断任何对象是否存在。做那件事的是**另一个**组件
+（`WindowsTargetExistingObjectProbe`，见 [`TARGET_PROBING.md`](TARGET_PROBING.md)），它位于探测层，
+发生在评估之前；规则层与它之间只通过"事实值对象"耦合。因此"两参数 `Evaluate` 会产出
+`TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED`"这件事，是规则层如实陈述"没有检查事实传进来"，
+而不是规则层自己去补一次检查。
+
 测试直接验证这一点：把目标目录指向一个**确定不存在**的随机路径，target-dependent 规则
 依然按输入声明的事实产生完全相同的 finding，名称规则同样照常产生。空间的 Error 化被明确推迟，
 正是因为那需要目标冲突等**新的观测事实**，而不是规则层去偷偷读磁盘。
 
 ## 10. 本阶段明确未实现的规则（延期）
 
-以下内容**有意**不在 M4 / M5 范围内，不要顺手加入：
+以下内容**有意**不在 M4 / M5 / M6 范围内，不要顺手加入：
 
-- **目标冲突**：目标 `relative-path` 是否已存在、file ↔ directory 类型冲突
-  （需要目标侧 I/O，属于后续 milestone）
-- **目标大小写敏感性 probe**：M5 的碰撞规则只描述"可能碰撞"，不去 probe 目标
-- **Unicode normalization 深度兼容**：不做 normalization，名称按观察到的原样判断
+- **overwrite / skip / keep-both 策略引擎**：M6 只报告"目标位置已被占用"，**不**决定复制程序会怎么做，
+  也**不**据此得出"会覆盖 / 会跳过"的结论
+- **目标内容比较 / 去重**：不读取任何一个文件的内容，不做 hash，不判断两个文件是否相同
+- **按已存在目标文件扣减空间**：M6 观测了存在性与种类，**没有**读取已存在对象的大小，
+  因此空间规则（§4.8）不据此调整，仍然只是 Warning
+- **目标大小写敏感性 probe**：M5 的碰撞规则（§4.10）只描述"源侧可能碰撞"，
+  M6 **也**不探测目标目录的大小写敏感性
+- **二阶大小写碰撞**：目标上**已存在**的对象与源名称仅大小写不同时，M6 不做专门判断
+- **完整目标索引器 / 递归扫描整个目标**：M6 只按需查询映射位置与所需祖先，**不**枚举无关目标内容
+- **Unicode normalization 深度兼容**：不做 normalization，名称按观察到的原样判断与查询
 - **8.3 短名碰撞**、**Alternate Data Streams 检测**（`:` 只按普通保留字符处理）
-- **reparse point 精确分类**（symlink / junction / mount point / other）
+- **reparse point 精确分类**（symlink / junction / mount point / other）与 **target 解析 / 跟随**：
+  源侧（§4.7）与目标侧（§4.12）都只记录"这是 reparse point"这一事实
 - **元数据丢失规则**（ACL / ADS / 时间戳精度等）
+- **extended-length namespace 的相对路径安全框架**：M6 只为语义明确的长路径选择内部查询形式，
+  不建立通用的路径安全抽象
 - **FAT12 / FAT16 的文件上限**：M4 只在文件系统名恰好为 `FAT32` 时执行 §4.4。
   名称接近但不同的文件系统（例如只报告 `FAT`）不会被套用该规则——宁可漏报，也不猜
 - UI 集成、规则插件系统、报告序列化
 
 ## 11. 与 M1 / M2 / M3 / M4 的关系
 
-M4 与 M5 **都没有修改**前几个里程碑的任何模型或契约：
+M4、M5 与 M6 **都没有修改**前几个里程碑的任何模型或契约：
 
 - `Finding` / `FindingCode` / `Severity` / `CapabilityValue<T>` / `TargetCapabilities` /
   `SourceEntry` / `SourceScanResult` / `SourceScanIssue` / `SourceEntryKind` 全部原样使用。
 - `SourceScanIssue` **没有**被加上 Severity（那仍属于规则层）。
 - 扫描器与目标探测的 public contract 未变；规则层只消费它们的输出。
-- M4 已发布的 12 个 FindingCode 一个都没有改名、没有复用（§3 只做了追加）。
+- 已发布的 16 个 FindingCode（M4 的 12 个 + M5 的 4 个）一个都没有改名、没有复用（§3 只做了追加）。
+- M6 追加的 8 个 code（§3）同样只做追加，且**没有**修改任何既有 code 的拼写或含义。
+- **`TargetCapabilities` 的三项没有被扩展**：M6 的逐项观测结果（每个映射位置上的对象）
+  **不**塞进 `FileSystemName` / `AvailableFreeBytes` / `MaxPathComponentLength` 里。它们是与
+  capability 无关的另一类事实，单独用 `TargetExistingObjectProbeResult` 表达。
+- 规则层 API 的唯一变化是给 `WindowsPreflightEvaluator` **追加**了一个三参数重载；
+  原来的两参数重载保留，且行为被明确定义为"未做检查"（§2）。
+- M6 新增的观测类型（`TargetObjectPresence`、`ExistingObjectObservation`、
+  `TargetExistingObjectProbeResult` 等）全部位于 **Windows 层的 `Probing/`**，
+  **没有**进入 `CopyPreflight.Core`，Core 仍然是无 Win32 / 无 I/O 的领域模型。
 - 没有新增第三方依赖，没有新增运行时项目；仍然是 Core / Windows / App / Tests 四个项目。

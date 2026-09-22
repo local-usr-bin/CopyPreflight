@@ -32,7 +32,10 @@ public class SourceScanIssueRuleTests
                 PreflightInputs.Issue(SourceScanIssueKind.CannotReadEntryMetadata, @"locked\unknown.bin"),
             ]);
 
-        var findings = PreflightInputs.Evaluate(source, PreflightInputs.HealthyTarget());
+        var findings = PreflightInputs.Evaluate(
+            source,
+            PreflightInputs.HealthyTarget(),
+            PreflightInputs.FoundNothingAtDestinations(source));
 
         Assert.Equal(2, findings.Count);
         Assert.Equal(

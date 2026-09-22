@@ -233,5 +233,14 @@ public class SourceCaseCollisionRuleTests
     }
 
     private static IReadOnlyList<Finding> Evaluate(params SourceEntry[] entries)
-        => PreflightInputs.Evaluate(PreflightInputs.Source(entries), PreflightInputs.HealthyTarget());
+    {
+        // The case-collision check is source-only, so the destination check is stated to have found
+        // nothing: that keeps the absence of collision findings a fact rather than a missing check.
+        var source = PreflightInputs.Source(entries);
+
+        return PreflightInputs.Evaluate(
+            source,
+            PreflightInputs.HealthyTarget(),
+            PreflightInputs.FoundNothingAtDestinations(source));
+    }
 }

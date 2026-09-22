@@ -56,12 +56,15 @@ public class TargetCapabilityCoverageRuleTests
             .Select(index => SourceEntry.File($"file{index}.txt", 1))
             .ToArray();
 
+        var source = PreflightInputs.Source(entries);
+
         var findings = PreflightInputs.Evaluate(
-            PreflightInputs.Source(entries),
+            source,
             Target(
                 filesystem: CapabilityValue<FileSystemName>.Unknown(),
                 freeBytes: CapabilityValue<long>.Unknown(),
-                componentLimit: CapabilityValue<int>.Unknown()));
+                componentLimit: CapabilityValue<int>.Unknown()),
+            PreflightInputs.FoundNothingAtDestinations(source));
 
         Assert.Single(findings.WithCode(WindowsPreflightFindingCodes.TargetFileSystemUnknown));
         Assert.Single(findings.WithCode(WindowsPreflightFindingCodes.TargetComponentLimitUnknown));
@@ -72,7 +75,12 @@ public class TargetCapabilityCoverageRuleTests
     [Fact]
     public void AFullyDescribedTargetProducesNoCoverageFindings()
     {
-        var findings = PreflightInputs.Evaluate(PreflightInputs.Source(), PreflightInputs.HealthyTarget());
+        var source = PreflightInputs.Source();
+
+        var findings = PreflightInputs.Evaluate(
+            source,
+            PreflightInputs.HealthyTarget(),
+            PreflightInputs.FoundNothingAtDestinations(source));
 
         Assert.Empty(findings);
     }
@@ -95,9 +103,12 @@ public class TargetCapabilityCoverageRuleTests
     {
         // A target whose free space is known but whose file system is not: exactly one gap to report,
         // and the known capability must not produce a finding of its own.
+        var source = PreflightInputs.Source();
+
         var findings = PreflightInputs.Evaluate(
-            PreflightInputs.Source(),
-            Target(filesystem: CapabilityValue<FileSystemName>.Unknown(), freeBytes: CapabilityValue<long>.Known(1)));
+            source,
+            Target(filesystem: CapabilityValue<FileSystemName>.Unknown(), freeBytes: CapabilityValue<long>.Known(1)),
+            PreflightInputs.FoundNothingAtDestinations(source));
 
         Assert.Single(findings);
         Assert.Equal(WindowsPreflightFindingCodes.TargetFileSystemUnknown, findings[0].Code);

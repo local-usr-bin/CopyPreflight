@@ -69,6 +69,40 @@ internal static class PreflightInputs
 
     internal static IReadOnlyList<Finding> Evaluate(SourceScanResult source, TargetProbeResult target)
         => new WindowsPreflightEvaluator().Evaluate(source, target);
+
+    /// <summary>
+    /// Evaluates with the facts a read-only check established about the mapped destinations.
+    /// </summary>
+    /// <param name="existingObjects">
+    /// Those facts, or <see langword="null"/> to model an evaluation that was given none.
+    /// </param>
+    internal static IReadOnlyList<Finding> Evaluate(
+        SourceScanResult source,
+        TargetProbeResult target,
+        TargetExistingObjectProbeResult? existingObjects)
+        => new WindowsPreflightEvaluator().Evaluate(source, target, existingObjects);
+
+    /// <summary>
+    /// The facts of a completed existing-object check that found nothing at the mapped destination of
+    /// every source entry.
+    /// </summary>
+    /// <remarks>
+    /// Tests whose subject is a source-only or capability rule use this so the absence of collision
+    /// findings follows from stated facts rather than from a check that was never supplied. It keeps
+    /// the destination check out of their picture without them having to depend on the
+    /// "check not performed" gap finding.
+    /// </remarks>
+    internal static TargetExistingObjectProbeResult FoundNothingAtDestinations(SourceScanResult source)
+        => FoundNothingAt([.. source.Entries.Select(entry => entry.RelativePath)]);
+
+    /// <summary>The facts of a completed check that found nothing at each of the given destinations.</summary>
+    internal static TargetExistingObjectProbeResult FoundNothingAt(params string[] relativePaths)
+        => ExistingObjectInputs.ProbeResult(
+            [.. relativePaths.Select(relativePath => ExistingObjectObservation.ObservedMissing(
+                relativePath,
+                ExistingObjectInputs.Mapped(relativePath),
+                ScriptedFileSystemApi.ErrorFileNotFound,
+                "The test states that nothing occupies this destination."))]);
 }
 
 /// <summary>Queries over a finding list that never assume a particular position in it.</summary>

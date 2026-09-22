@@ -105,7 +105,10 @@ public class WindowsPreflightEvaluatorTests
     {
         // No findings means "no known blocking issue was detected". It is never reported as a
         // reassuring success finding, because CopyPreflight cannot promise that a copy will succeed.
-        var findings = PreflightInputs.Evaluate(PreflightInputs.Source(), PreflightInputs.HealthyTarget());
+        var findings = PreflightInputs.Evaluate(
+            PreflightInputs.Source(),
+            PreflightInputs.HealthyTarget(),
+            ExplicitlyFoundNothing());
 
         Assert.Empty(findings);
     }
@@ -114,16 +117,46 @@ public class WindowsPreflightEvaluatorTests
     public void OnlyProblemsAreReported()
     {
         // A clean, well-described target and a healthy source produce nothing at all: there is no
-        // "all clear" finding, and no information is invented to fill the report.
+        // "all clear" finding, and no information is invented to fill the report. The destinations are
+        // stated to hold nothing, which is a fact rather than an absence of one.
         var source = PreflightInputs.Source(
             SourceEntry.File(@"docs\report.docx", 1024),
             SourceEntry.Directory("media"),
             SourceEntry.File(@"media\clip.mp4", 2048));
 
-        var findings = PreflightInputs.Evaluate(source, PreflightInputs.HealthyTarget());
+        var findings = PreflightInputs.Evaluate(
+            source,
+            PreflightInputs.HealthyTarget(),
+            ExplicitlyFoundNothing(@"docs\report.docx", "media", @"media\clip.mp4"));
 
         Assert.Empty(findings);
     }
+
+    [Fact]
+    public void OmittingTheExistingObjectCheckIsReportedRatherThanSilent()
+    {
+        // The two-argument entry point carries no check of what the destinations hold. Saying nothing
+        // would be indistinguishable from "nothing occupies them", so the gap is stated instead.
+        var findings = PreflightInputs.Evaluate(
+            PreflightInputs.Source(SourceEntry.File(@"docs\report.docx", 1024)),
+            PreflightInputs.HealthyTarget());
+
+        var finding = Assert.Single(findings);
+
+        Assert.Equal(WindowsPreflightFindingCodes.TargetExistingObjectCheckNotPerformed, finding.Code);
+        Assert.Equal(Severity.Info, finding.Severity);
+    }
+
+    /// <summary>
+    /// The facts of a completed check that found nothing at the given destinations.
+    /// </summary>
+    /// <remarks>
+    /// Used by the tests whose point is that a clean source and a clean target produce no findings:
+    /// they now state the destination facts explicitly, so that the absence of collision findings is a
+    /// consequence of those facts rather than of no check having been carried out.
+    /// </remarks>
+    private static TargetExistingObjectProbeResult ExplicitlyFoundNothing(params string[] relativePaths)
+        => PreflightInputs.FoundNothingAt(relativePaths);
 
     /// <summary>
     /// A source whose facts trigger several rules at once, with the entries in a fixed order so the

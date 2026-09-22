@@ -78,7 +78,10 @@ public class TargetFreeSpaceRuleTests
         // reported in that case. Only observed problems are reported.
         var source = PreflightInputs.Source(SourceEntry.File("small.txt", 10));
 
-        var findings = PreflightInputs.Evaluate(source, TargetWithFreeSpace(AvailableFreeBytes));
+        var findings = PreflightInputs.Evaluate(
+            source,
+            TargetWithFreeSpace(AvailableFreeBytes),
+            PreflightInputs.FoundNothingAtDestinations(source));
 
         Assert.Empty(findings);
     }

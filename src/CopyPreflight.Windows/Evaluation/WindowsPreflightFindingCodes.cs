@@ -78,6 +78,52 @@ public static class WindowsPreflightFindingCodes
     /// <summary>Sibling source objects have names that differ only in letter case.</summary>
     public static readonly FindingCode SourceCaseCollisionRisk = new("SOURCE_CASE_COLLISION_RISK");
 
+    /// <summary>A regular file already occupies the destination a regular source file maps onto.</summary>
+    public static readonly FindingCode TargetExistingFileCollision = new("TARGET_EXISTING_FILE_COLLISION");
+
+    /// <summary>
+    /// The destination a source object maps onto already holds an object of the other kind, so the
+    /// exact mapping is structurally blocked.
+    /// </summary>
+    public static readonly FindingCode TargetExistingTypeCollision = new("TARGET_EXISTING_TYPE_COLLISION");
+
+    /// <summary>The destination a source object maps onto already holds a reparse point.</summary>
+    public static readonly FindingCode TargetExistingReparsePoint = new("TARGET_EXISTING_REPARSE_POINT");
+
+    /// <summary>
+    /// A source object that is itself a reparse point maps onto a location that already holds an
+    /// ordinary file or directory.
+    /// </summary>
+    public static readonly FindingCode SourceReparsePointExistingTargetObject =
+        new("SOURCE_REPARSE_POINT_WITH_EXISTING_TARGET_OBJECT");
+
+    /// <summary>
+    /// Whether an object already occupies a mapped destination could not be established, so existence
+    /// and kind remain unknown there.
+    /// </summary>
+    public static readonly FindingCode TargetExistingObjectCheckFailed =
+        new("TARGET_EXISTING_OBJECT_CHECK_FAILED");
+
+    /// <summary>
+    /// The existing-object check ran but left part of the inventory unexamined, so no conclusion about
+    /// collisions covers those locations.
+    /// </summary>
+    public static readonly FindingCode TargetExistingObjectCoverageIncomplete =
+        new("TARGET_EXISTING_OBJECT_COVERAGE_INCOMPLETE");
+
+    /// <summary>
+    /// No existing-object check was supplied, so nothing about collisions was examined.
+    /// </summary>
+    public static readonly FindingCode TargetExistingObjectCheckNotPerformed =
+        new("TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED");
+
+    /// <summary>
+    /// The existing-object check was cancelled before it finished, so the locations it never reached
+    /// are unknown rather than absent.
+    /// </summary>
+    public static readonly FindingCode TargetExistingObjectCheckCancelled =
+        new("TARGET_EXISTING_OBJECT_CHECK_CANCELLED");
+
     /// <summary>
     /// Every code declared above, in declaration order. For tests and diagnostics only; nothing
     /// iterates this to decide which rules run.
@@ -100,5 +146,13 @@ public static class WindowsPreflightFindingCodes
         TargetNameReservedDevice,
         TargetNameTrailingSpaceOrPeriod,
         SourceCaseCollisionRisk,
+        TargetExistingFileCollision,
+        TargetExistingTypeCollision,
+        TargetExistingReparsePoint,
+        SourceReparsePointExistingTargetObject,
+        TargetExistingObjectCheckFailed,
+        TargetExistingObjectCoverageIncomplete,
+        TargetExistingObjectCheckNotPerformed,
+        TargetExistingObjectCheckCancelled,
     ];
 }

@@ -24,6 +24,9 @@ CopyPreflight 由五个职责构成。它们的边界是清晰的，且可以独
 
 无法确定的能力必须明确表达为 **Unknown**，而不是被省略或被猜测。它**不读取源内容**，也**不评估**具体的源对象。
 
+M6 起，这一层还包含一个并列的**只读**子职责（见 §4.6）：观察**每个源对象映射到的目标位置上当前已有什么**
+（已存在对象 / 确证缺失 / 检查失败 / 未查询）。它同样只观察、不判断、不产出 `Finding`，也不写入任何东西。
+
 ### 1.3 rule evaluation
 
 **负责根据 source facts + target capabilities 产生 findings。**
@@ -62,6 +65,7 @@ finding 是**描述性的**，它不触发任何变更操作。
 | --- | --- |
 | Scanner | **"我观察到了什么？"** |
 | Target capability layer | **"目标已知能做什么？"** |
+| Target existing-object layer（M6） | **"目标位置上当前已有什么？"** |
 | Rules | **"二者组合意味着什么？"** |
 
 这三句话是判断某段代码该放在哪里的第一准则。
@@ -72,8 +76,8 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 - `CopyPreflight.Core` —— 承载 1.1–1.4 的职责，**不依赖 WPF**，**不依赖** `CopyPreflight.App` 或
   `CopyPreflight.Windows`；保持 `net10.0`，不含 Win32 P/Invoke。
-- `CopyPreflight.Windows` —— 承载 1.2 的 Windows 具体实现（Win32 interop、Windows 卷 / 目标发现）
-  与 1.3 的规则评估（见 §4.4），引用 `CopyPreflight.Core`。平台限定为 `net10.0-windows`。
+- `CopyPreflight.Windows` —— 承载 1.2 的 Windows 具体实现（Win32 interop、Windows 卷 / 目标发现、
+  M6 的已存在对象探测）与 1.3 的规则评估（见 §4.4），引用 `CopyPreflight.Core`。平台限定为 `net10.0-windows`。
 - `CopyPreflight.App` —— 承载 1.5，引用 `CopyPreflight.Core`。
 - `CopyPreflight.Tests` —— 引用 `CopyPreflight.Core` 与 `CopyPreflight.Windows`。
 
@@ -82,7 +86,8 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 > M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1），
 > M2 确定了源扫描器的公开契约与结果模型（见 §4.2），M3 确定了目标能力探测的 Windows 实现与契约（见 §4.3），
-> M4 确定了规则评估的入口与已实现规则（见 §4.4），M5 在其中加入了 Windows 命名兼容性规则（见 §4.5）。
+> M4 确定了规则评估的入口与已实现规则（见 §4.4），M5 在其中加入了 Windows 命名兼容性规则（见 §4.5），
+> M6 加入了目标已存在对象 / 碰撞的只读探测与对应规则（见 §4.6）。依赖方向自始至终未变。
 
 ## 4. 本阶段已确定 / 未确定的事
 
@@ -207,15 +212,52 @@ M5 在同一个 `WindowsPreflightEvaluator` 中加入了 Windows 命名兼容性
   case sensitivity，且 M5 没有 probe 目标，因此不能声称"一定冲突"。
 - 仍然**没有**为此新增项目、DI、registry、反射发现或插件机制，也没有新增第三方依赖。
 
-### 4.6 仍未确定
+### 4.6 M6 已确定：目标已存在对象 / 碰撞
+
+M6 在 Windows 层新增了一个只读探测器与一条规则，把"目标位置上已有什么"接进评估。数据流为：
+
+```text
+SourceScanResult + TargetProbeResult
+        │
+        ▼
+WindowsTargetExistingObjectProbe        （只读观测；不产出 Finding）
+        │  产出 TargetExistingObjectProbeResult
+        ▼
+WindowsPreflightEvaluator               （纯计算；不做 I/O）
+        │  经 TargetExistingObjectRule
+        ▼
+Finding
+```
+
+| 职责 | 类型 | 语义 |
+| --- | --- | --- |
+| 1.2 target discovery | `WindowsTargetExistingObjectProbe` | 按固定映射 `target\<relative-path>` 只读查询每个映射位置与所需祖先；产出事实，不产出 Finding |
+| 1.2 target discovery | `TargetExistingObjectProbeResult` / `ExistingObjectObservation` / `TargetObjectPresence` / `TargetRootObservation` | 已存在对象的事实与覆盖信息（观测 / 确证缺失 / 推导缺失 / 检查失败 / 未查询） |
+| 1.3 rule evaluation | `TargetExistingObjectRule` | 把上述事实翻译成 Finding（file→file Warning、类型冲突 Error、目标 reparse Warning、检查失败 Warning、覆盖 / 未执行 / 取消 Info） |
+
+关键边界：
+
+- **探测与判断分离**：探测器只产出事实，`TargetObjectPresence` 与 `ExistingObjectGapReason` 都不带 Severity；
+  Severity 只在 `TargetExistingObjectRule` 里决定。
+- **`TargetCapabilities` 未被扩展**：逐项观测结果不放进 `FileSystemName` / `AvailableFreeBytes` /
+  `MaxPathComponentLength`，而是单独用 `TargetExistingObjectProbeResult` 表达。
+- **规则层仍然零 I/O**：`TargetExistingObjectRule` 不调用任何 Win32 API；做 I/O 的是探测器。
+- **评估入口向后兼容**：`WindowsPreflightEvaluator` 追加了一个三参数重载；
+  原两参数重载保留，其语义被明确为"未做检查 → `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED`（Info）"，
+  绝不冒充"目标干净"。
+- **没有**为此新增运行时项目、第二个 Windows 程序集、或第三方依赖；探测类型全部在
+  `CopyPreflight.Windows`（`Probing/`），Core 保持 `net10.0` 且无 P/Invoke。
+- 语义细节见 [`TARGET_PROBING.md`](TARGET_PROBING.md) §13 与 [`RULES.md`](RULES.md) §4.12。
+
+### 4.7 仍未确定
 
 为避免过度设计，以下内容仍然**不予确定**，留待有真实需求驱动的里程碑：
 
 - 规则的插件化：规则层只需要固定的一组规则，因此规则由 `WindowsPreflightEvaluator` 直接按名字调用；
   registry / discovery / plugin / 规则脚本仍然不存在，也不打算在没有真实需求时建立
-- 尚未实现的规则：目标对象冲突与 file ↔ directory 类型冲突、目标大小写敏感性 probe、
-  8.3 短名碰撞、ADS 检测、reparse point 精确分类、元数据（ACL / 时间戳）丢失规则、
-  Unicode normalization 深度兼容
+- 尚未实现的规则：overwrite / skip 策略、目标内容比较、按已存在目标文件扣减空间、
+  目标大小写敏感性 probe、二阶大小写碰撞、完整目标索引器 / 递归扫描目标、8.3 短名碰撞、
+  ADS 检测、reparse point 精确分类、元数据（ACL / 时间戳）丢失规则、Unicode normalization 深度兼容
 - findings 的展示形式与序列化方式
 - 扫描器、目标探测与规则评估在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
 
