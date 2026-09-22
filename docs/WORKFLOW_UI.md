@@ -6,6 +6,9 @@
 > 它不改变任何既有规则、Finding 文本或 Severity 语义，也不改变
 > [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md) 的产品范围。
 > 状态：**M7 已实现并独立提交，等待验收**。
+> 2026-09-22 验收反馈核实了三件事——界面绑定接线、进度投递的合并、取消识别与终态发布边界——
+> 其中两处修正（`IsFindingsEmpty` 的通知、`OperationCanceledException` 的过滤条件）见本文 §4、§10.1，
+> 以独立 corrective commit 提交；M7 仍未最终验收。
 
 ## 1. 编排层回答什么
 
@@ -20,8 +23,10 @@
 | 4 | `EvaluatingRules` | `WindowsPreflightEvaluator.Evaluate(source, target, existingObjects)`（**三参数重载**） |
 
 - 每个阶段开始前先广播该阶段的进度快照，**阶段之间**检查一次取消。
-- M6 的已存在对象事实**总是**被取得，评估器**总是**拿到它；两参数重载不会被悄悄使用
+- **在一个正常走到评估阶段的运行里**，M6 的已存在对象事实总是被取得、评估器总是拿到它；两参数重载不会被悄悄使用
   （用它会产出 `…CHECK_NOT_PERFORMED` Info，等于把"没查"当成"查过"）。
+  取消或失败的运行在它当时所在的阶段停下，**其后的阶段根本没有执行**，结果里记为 `NotPerformed`——
+  这不违反上面的约定，因为约定说的是"凡是走到评估的这次运行"，而不是"不论什么运行都会评估"。
 - 这条路径上**没有**示例数据、没有替身、没有捷径：四个阶段都是生产实现。
 
 ## 2. 三个维度互不折叠
@@ -65,10 +70,17 @@
   全程没有 `.Wait()` / `.Result`，没有 `async void`（WPF 事件边界除外）。
 - **每次运行一个 `CancellationTokenSource`**，运行结束即释放。
 - **取消是诚实的**：
-  - 只有属于本次运行的 `OperationCanceledException`（`cancellation.CancellationToken == token`）
-    才算用户取消；其他 token 的取消按 **`Failed`** 处理，绝不冒充用户的停止请求。
+  - 只有**同时**满足两件事的 `OperationCanceledException` 才算用户取消：
+    `token.IsCancellationRequested` 为真，且 `exception.CancellationToken == token`。
+    只比较 token 是不够的——一个阶段可以抛出一个"带着本轮 token"的异常而根本没有谁请求过取消，
+    那必须按 **`Failed`** 处理，而不是伪装成用户的停止请求。
+  - 其他 token 的取消同样按 **`Failed`** 处理。
   - 取消后**绝不**进入下一阶段，**绝不**重新观测来"补齐"。
   - 未完成的运行**不产出 findings**。
+- **终态只由返回的状态决定**：界面显示的终态来自 `PreflightRunResult.Status`，不是"界面当时以为自己在做什么"。
+  运行真正结束之后到达的取消请求不会改写已经发布的终态；而界面处于 `Cancelling` 时收到的结果若确实是
+  `Completed`（取消来得太晚，评估已经跑完），界面就发布 `Completed`——因为那次评估确实产出了，
+  把它显示成"已取消"才是失实。
 - **重复运行**：编排层无状态，可复用；一次失败或取消后可以立即再跑，
   新运行拿到新的 `RequestId` 和新的 token source，不受前一次影响。
 
@@ -128,7 +140,7 @@ dotnet test CopyPreflight.sln
 dotnet run --project src/CopyPreflight.App
 ```
 
-界面产物：`src/CopyPreflight.App/bin/Debug/net10.0-windows/CopyPreflight.App.dll`（WPF 可执行）。
+界面产物：`src/CopyPreflight.App/bin/Debug/net10.0-windows/CopyPreflight.App.exe`（WPF 可执行）。
 
 ## 10. 限制与边界
 
@@ -142,6 +154,24 @@ dotnet run --project src/CopyPreflight.App
   呈现层没有为每个方法定义接口。
 - 未做人工验证的部分（无法在无交互环境中确认的）在 M7 完成报告中**明确列出**，
   不声称已验证。
+
+### 10.1 验证证据的分类（不要把其中一类说成另一类）
+
+| 类别 | 能说明什么 | 不能说明什么 |
+| --- | --- | --- |
+| 启动冒烟（进程存活、主窗口句柄非 0、空闲关窗被接受） | 程序能起来、XAML 能解析、窗口能创建 | 任何一次真实控件交互 |
+| 静态接线检查（读 `MainWindow.xaml` / code-behind / ViewModel） | 标记与方法的对应关系存在 | 运行起来真的接了、绑定真的收到通知 |
+| 呈现层测试（无窗口的状态机断言） | 状态机规则本身 | XAML 绑定与通知链 |
+| 带窗口的绑定核查（本仓库 `MainWindowBindingTests`，STA + Dispatcher） | 真实标记里的绑定确实解析、通知确实到达、`Click` 确实接到 code-behind、`Closing` 确实接到拒绝逻辑 | 人工操作手感（拖动分隔条、实际点击浏览、超大列表滚动） |
+| 真实文件系统集成测试 | 真实 M2/M3/M6/规则链在真实目录上的行为 | 真实用户目录上的端到端结论 |
+| 人工窗口操作 | 手感与真实交互 | 不适用于无人值守环境 |
+
+- **对只读边界的证据边界**：源码中**没有**写入调用（`File.*` 写族 / `Directory.Create` / `Directory.Delete` /
+  `OpenWrite` / `CreateFileW` / `WriteAll*` 等）的 grep 结果，以及"有限状态对比"（在最小范围的固定场景里
+  对比目标目录前后状态），都只是**证据**，**不是**系统级的"零写入证明"。真正的零写入证明需要内核级审计，
+  本项目不声称有。
+- 测试夹具一律创建在仓库自己的 `artifacts/test-fixtures` 下，只操作这些测试自己拥有的资源；
+  **不使用**真实用户目录，也不回退到系统临时目录。
 
 ## 11. 相关文档
 

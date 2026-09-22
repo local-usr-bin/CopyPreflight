@@ -27,11 +27,29 @@ public partial class MainWindow : Window
 
     /// <summary>Creates the window over the real workflow.</summary>
     public MainWindow()
+        : this(new CheckViewModel())
     {
+    }
+
+    /// <summary>
+    /// Creates the window over a supplied view model. For tests only.
+    /// </summary>
+    /// <param name="viewModel">The state machine the window binds to and forwards its events to.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="viewModel"/> is <see langword="null"/>.</exception>
+    /// <remarks>
+    /// Exists so that a test can put the window in front of the states it binds to — an input refusal, a
+    /// run in progress, a finished assessment with a finding selected — and check the bindings against
+    /// the real markup. It is not a way to replace the workflow in production: the window is still built
+    /// over the real view model by the constructor above.
+    /// </remarks>
+    internal MainWindow(CheckViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
         InitializeComponent();
 
-        _viewModel = new CheckViewModel();
-        DataContext = _viewModel;
+        _viewModel = viewModel;
+        DataContext = viewModel;
 
         // Wired here rather than in the markup, so that all of this window's wiring is in one place.
         Closing += OnClosing;

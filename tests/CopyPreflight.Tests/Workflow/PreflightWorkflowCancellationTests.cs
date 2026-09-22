@@ -230,4 +230,77 @@ public class PreflightWorkflowCancellationTests
         Assert.NotEqual(failed.Request.RequestId, second.Request.RequestId);
         Assert.True(reader.ListingsRequested >= 2, "The second run should have observed the source again.");
     }
+
+    /// <summary>
+    /// The ways a cancellation-shaped exception can reach a run, other than another token's.
+    /// </summary>
+    /// <remarks>
+    /// The remaining possibility — an exception carrying a different token — is covered by
+    /// <see cref="RunAsync_WhenACancellationBelongsToAnotherToken_TreatsItAsAFailure"/>.
+    /// </remarks>
+    public enum CancellationShape
+    {
+        /// <summary>This run was asked to stop, and the exception carries this run's own token.</summary>
+        ThisRunWasAskedToStop,
+
+        /// <summary>Nothing was ever cancelled, but the exception carries this run's own token.</summary>
+        ThisRunsTokenWasNeverCancelled,
+
+        /// <summary>The run was given no token, and the exception carries none either.</summary>
+        NoTokenAtAll,
+    }
+
+    [Theory]
+    [InlineData(CancellationShape.ThisRunWasAskedToStop, PreflightRunStatus.Cancelled)]
+    [InlineData(CancellationShape.ThisRunsTokenWasNeverCancelled, PreflightRunStatus.Failed)]
+    [InlineData(CancellationShape.NoTokenAtAll, PreflightRunStatus.Failed)]
+    public async Task RunAsync_OnlyTreatsItsOwnRequestedCancellationAsTheUsersStop(
+        CancellationShape shape,
+        PreflightRunStatus expected)
+    {
+        using var source = new TemporarySourceTree();
+        using var thisRun = new CancellationTokenSource();
+
+        var token = shape == CancellationShape.NoTokenAtAll ? default : thisRun.Token;
+
+        if (shape == CancellationShape.ThisRunWasAskedToStop)
+        {
+            thisRun.Cancel();
+        }
+
+        // Carrying this run's token is not the same as this run having been cancelled: a stage can throw
+        // an exception that names the token without anyone having requested anything. Reading the token
+        // alone would report that as the user's own request to stop.
+        var thrown = shape == CancellationShape.NoTokenAtAll
+            ? new OperationCanceledException()
+            : new OperationCanceledException("This run's token.", thisRun.Token);
+
+        var reader = new FlakyDirectoryReader(thrown);
+
+        var result = await WorkflowInputs.Over(new SourceScanner(reader)).RunAsync(
+            WorkflowInputs.Request(source.Root, WorkflowInputs.TargetRoot),
+            progress: null,
+            token);
+
+        Assert.Equal(expected, result.Status);
+
+        if (expected == PreflightRunStatus.Cancelled)
+        {
+            Assert.Null(result.Failure);
+            Assert.Empty(result.Findings);
+
+            // The request was already in place before the run began, so the source was never even asked
+            // to list anything.
+            Assert.Equal(0, reader.ListingsRequested);
+
+            return;
+        }
+
+        // Not the user's cancellation, so it is recorded as what it was — an exception — rather than
+        // being dressed up as a stop request, and nothing is derived from the partial facts.
+        Assert.Equal(
+            "System.OperationCanceledException",
+            Assert.IsType<PreflightRunFailure>(result.Failure).ExceptionTypeName);
+        Assert.Empty(result.Findings);
+    }
 }

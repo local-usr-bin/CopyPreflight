@@ -135,7 +135,11 @@ public sealed class PreflightWorkflow
     /// </para>
     /// <para>
     /// A cancellation reported against a different token is not this run's cancellation and is treated
-    /// as an unexpected failure, so an unrelated cancellation cannot be presented as the user's.
+    /// as an unexpected failure, so an unrelated cancellation cannot be presented as the user's. Nor is
+    /// a cancellation carrying this run's own token when nothing has requested it: a run was cancelled
+    /// by the user only if the token it was handed had actually been cancelled when the exception was
+    /// raised. Both halves are required, because either one alone can be true for a stage that simply
+    /// threw <see cref="OperationCanceledException"/> on its own.
     /// </para>
     /// </remarks>
     public PreflightRunResult Run(
@@ -190,7 +194,8 @@ public sealed class PreflightWorkflow
                 failure: null);
         }
         catch (OperationCanceledException cancellation)
-            when (cancellation.CancellationToken == cancellationToken)
+            when (cancellationToken.IsCancellationRequested
+                && cancellation.CancellationToken == cancellationToken)
         {
             // The run was cancelled. What was established is kept; what was not returned stays
             // unestablished; and no finding is derived from the partial facts.

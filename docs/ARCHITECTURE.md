@@ -282,6 +282,10 @@ PreflightRunResult（status / coverage / findings 三个维度，互不折叠）
 CheckViewModel（状态机 + 文案 + FindingRow[]）→ MainWindow（只绑定与转发）
 ```
 
+上面的四个阶段**只在一个正常走到评估阶段的运行里**全部执行。取消或失败时，运行在它当时所在的阶段停下，
+其后的阶段根本没有执行，结果里就记为 `NotPerformed`——"没有执行"和"执行了但没发现问题"在结果与界面上
+始终是两件事。
+
 | 职责 | 类型 | 语义 |
 | --- | --- | --- |
 | 1.5 编排 | `PreflightRequest` / `PreflightRequestError` | 两个路径**原样保留**（不 trim、不规范化）；只做"非空 + 完全限定路径"检查；携带 `RequestId` |
@@ -290,6 +294,7 @@ CheckViewModel（状态机 + 文案 + FindingRow[]）→ MainWindow（只绑定�
 | 1.5 编排 | `PreflightRunStatus` / `PreflightPhaseCoverage` / `PreflightCoverage` | 运行状态、单阶段覆盖度、整体覆盖度。`HasGaps` 可单独查询 |
 | 1.5 编排 | `PreflightRunFailure` / `PreflightRunResult` | 失败原因与最终结果；构造函数拒绝自相矛盾的组合 |
 | 1.5 呈现 | `CheckViewModel` / `CheckState` / `PreflightText` / `FindingRow` | 状态机、文案与结果行；**不含任何 WPF 类型**，可在没有窗口的情况下测试 |
+| 1.5 呈现 | `CoalescingProgress` | 进入界面队列前的进度合并：只保留最新快照，任何时刻队列里最多一个回调 |
 | 1.5 呈现 | `MainWindow` | 只做绑定与事件转发（浏览文件夹、开始、取消、关闭拦截） |
 
 关键边界：
@@ -301,14 +306,19 @@ CheckViewModel（状态机 + 文案 + FindingRow[]）→ MainWindow（只绑定�
 - **未经执行的阶段不会被当成"干净"**：漏做 M6（两参数重载）仍然只产出
   `…CHECK_NOT_PERFORMED`（Info），覆盖率显示为 `NotPerformed`。
 - **"已开始但未返回" ≠ "从未执行"**：一次中断的源观测覆盖率记为 `Incomplete`（不是 `NotPerformed`），
-  因为它确实走过了一部分树，并且旁边的"observed so far"计数与它一致。
+  因为它确实走过了一部分树，并且旁边的"observed so far"计数与它一致。`Incomplete` 只说明**这一阶段被进入过、
+  没有产出清单**，它本身**不**证明其中任何对象被观察到——那些计数是"看到过什么"，不是"有什么"。
 - **未完成的运行不产出 findings**：取消或失败的运行保留已确立的事实和未到达的阶段，但不做评估——
   否则"部分评估"和"完整评估"在界面上无法区分。
 - **只有真正完成的运行才可达冻结语句**：`"No known blocking issue was detected."` 仅在运行状态为
   Completed 且 Error 计数为 0 时出现。覆盖缺口会与它**并列**显示，而不是被它取代。
 - **取消是诚实的**：每次运行一个 `CancellationTokenSource`；只有属于本次运行的
-  `OperationCanceledException` 才算用户取消，其他 token 的取消按失败处理；取消后绝不进入下一阶段、
-  绝不重新观测来"补齐"。
+  `OperationCanceledException`（同时要求 `token.IsCancellationRequested` 与
+  `exception.CancellationToken == token`）才算用户取消，其他 token 的取消、以及"带着本轮 token 但本轮并未
+  被取消"的异常都按失败处理；取消后绝不进入下一阶段、绝不重新观测来"补齐"。
+- **进度合并发生在进入界面队列之前**：`CoalescingProgress` 只保留最新快照，任何时刻排队等待界面线程的
+  回调最多一个；被更新快照取代的中间快照直接丢弃，不进入队列。这不等同于"在队列里逐条执行后再丢弃显示"——
+  前者控制的是**投递量**，后者控制不了。
 - **关窗不放弃正在运行的工作**：忙碌时拒绝关闭并请求取消，窗口保持响应，直到运行真正结束。
 - **仍然只读**：编排与界面都**不**向源或目标写入任何 probe / 临时文件，不复制、不移动、不删除、不重命名、
   不改权限、不读内容。窗口上明确写着这一点。

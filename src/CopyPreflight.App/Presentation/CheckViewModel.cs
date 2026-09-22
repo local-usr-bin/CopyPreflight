@@ -97,12 +97,17 @@ public sealed class CheckViewModel : INotifyPropertyChanged
     /// <param name="workflow">The workflow that carries out the check.</param>
     /// <exception cref="ArgumentNullException"><paramref name="workflow"/> is <see langword="null"/>.</exception>
     /// <remarks>
-    /// The progress sink is built when a run starts, which is on the interface thread, so
-    /// <see cref="Progress{T}"/> captures the interface's synchronization context and its callbacks
-    /// are already on the right thread. Nothing here reads or posts to a dispatcher itself.
+    /// The progress sink is built when a run starts, which is on the interface thread, so the
+    /// synchronization context it captures is the interface's and its callbacks are already on the
+    /// right thread. Nothing here reads or posts to a dispatcher itself.
+    /// <para>
+    /// The sink coalesces: a snapshot that a later one has already superseded is replaced rather than
+    /// queued behind it, so a source tree that reports far faster than the screen redraws cannot pile
+    /// up a backlog of snapshots that are stale before they are ever shown.
+    /// </para>
     /// </remarks>
     public CheckViewModel(PreflightWorkflow workflow)
-        : this(workflow, handler => new Progress<PreflightRunProgress>(handler))
+        : this(workflow, handler => new CoalescingProgress<PreflightRunProgress>(handler))
     {
     }
 
@@ -374,6 +379,12 @@ public sealed class CheckViewModel : INotifyPropertyChanged
             if (SetProperty(ref _findings, value))
             {
                 OnPropertyChanged(nameof(HasFindings));
+
+                // The list being empty and the list having rows are the same fact seen twice, but they
+                // are two separate bindings on screen, so both have to be told. A binding is only ever
+                // re-read for the property it follows by name; telling the list's own property changed
+                // says nothing to the element bound to the opposite of it.
+                OnPropertyChanged(nameof(IsFindingsEmpty));
             }
         }
     }

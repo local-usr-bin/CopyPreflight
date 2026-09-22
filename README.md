@@ -88,8 +88,8 @@ dotnet test CopyPreflight.sln
 
 `dotnet build` 会隐式执行 restore，因此最简流程是 `build` → `test`。
 
-手动启动检查界面（用于人工确认窗口可启动并可完成一次检查；界面本身不参与自动化测试——
-状态机与结果展示由测试直接驱动，不需要窗口）：
+手动启动检查界面（用于人工确认窗口可启动并能完成一次检查）：控件级的绑定接线由带真实窗口的
+`MainWindowBindingTests` 核查；拖动分隔条、点击浏览对话框、超大列表滚动手感仍**未**做人工验证：
 
 ```bash
 dotnet run --project src/CopyPreflight.App
@@ -108,5 +108,6 @@ dotnet run --project src/CopyPreflight.App
   大小写碰撞、reparse point、可用空间、目标已存在对象与碰撞）、Unknown 能力的 coverage Info、
   顺序与短路语义、为什么可用空间与大小写碰撞当前只能是 Warning。
 - [`docs/WORKFLOW_UI.md`](docs/WORKFLOW_UI.md) — 检查编排与最小 WPF 界面契约：阶段顺序、运行状态 /
-  覆盖 / 风险三个维度、取消与重复运行、迟到回调、进度、窗口行为、结果展示、限制与已知边界。
+  覆盖 / 风险三个维度、取消与重复运行、迟到回调、进度与投递合并、窗口行为、结果展示、
+  限制、验证证据分类与已知边界。
 - [`AGENTS.md`](AGENTS.md) — 后续开发需要遵守的仓库级工程规范。
