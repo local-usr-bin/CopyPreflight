@@ -182,6 +182,73 @@ public class TargetExistingObjectProbeTests
     }
 
     [Fact]
+    public void RecordsTheOrdinaryFileThatStopsABranchEvenWhenTheInventoryDoesNotListIt()
+    {
+        // An inventory names objects, not the directories they sit in, so a path can run through a
+        // directory no entry mentions. The file that stops such a branch is a fact about its own mapped
+        // location and is stated there; leaving it implicit would let a finished run say nothing at all
+        // about a mapping that is structurally blocked.
+        var source = ExistingObjectInputs.Source(SourceEntry.File(@"photos\2026\a.jpg", 1));
+
+        // The directory in between is deliberately not scripted: a strict seam turns any query about it
+        // into a failure, which is how this test proves the branch was not walked into.
+        var (result, api) = ExistingObjectInputs.Run(
+            source,
+            api => api
+                .WithAttribute(ExistingObjectInputs.TargetRoot, FileAttributes.Directory)
+                .WithAttribute(ExistingObjectInputs.Mapped("photos"), FileAttributes.Normal));
+
+        var blockingAncestor = result.ObservationFor("photos");
+
+        Assert.Equal(ExistingObjectObservationKind.Observed, blockingAncestor.Kind);
+        Assert.Equal(TargetObjectPresence.File, blockingAncestor.Presence);
+        Assert.Equal(ExistingObjectInputs.Mapped("photos"), blockingAncestor.MappedTargetPath);
+
+        var descendant = result.ObservationFor(@"photos\2026\a.jpg");
+
+        Assert.Equal(ExistingObjectObservationKind.NotQueried, descendant.Kind);
+        Assert.Equal(ExistingObjectGapReason.BlockedByExistingObject, descendant.GapReason);
+        Assert.Equal("photos", descendant.BlockingAncestorRelativePath);
+
+        // Nothing failed at the descendant, and nothing is claimed to have been asked about it: the code
+        // that would describe a query belongs to no query, so it stays absent rather than being invented.
+        Assert.Null(descendant.NativeErrorCode);
+        api.AssertAttributeQueries(ExistingObjectInputs.TargetRoot, ExistingObjectInputs.Mapped("photos"));
+
+        // A confirmed structural conflict is a conclusion, not a gap: the run finished, and what it
+        // finished with is the conflict itself. Two locations were accounted for, one of them unqueried.
+        Assert.Equal(TargetExistingObjectProbeOutcome.Completed, result.Outcome);
+        Assert.Equal(2, result.Observations.Count);
+        Assert.Single(result.Observations, observation => observation.Kind == ExistingObjectObservationKind.NotQueried);
+    }
+
+    [Fact]
+    public void TheBlockingFileIsRecordedOnceWhicheverOrderTheInventoryArrivesIn()
+    {
+        var entries = new SourceEntry[]
+        {
+            SourceEntry.Directory("photos"),
+            SourceEntry.File(@"photos\2026\a.jpg", 1),
+        };
+
+        static void Script(ScriptedFileSystemApi api) => api
+            .WithAttribute(ExistingObjectInputs.TargetRoot, FileAttributes.Directory)
+            .WithAttribute(ExistingObjectInputs.Mapped("photos"), FileAttributes.Normal);
+
+        var forward = ExistingObjectInputs.Run(ExistingObjectInputs.Source(entries), Script);
+        var backward = ExistingObjectInputs.Run(
+            ExistingObjectInputs.Source([.. entries.Reverse()]),
+            Script);
+
+        // The blocking file is reached twice — once as an entry of its own and once as the ancestor
+        // that stopped the other — and it is one location with one observation either way.
+        Assert.Equal(2, forward.Result.Observations.Count);
+        Assert.Equal(2, backward.Result.Observations.Count);
+        Assert.Equal(forward.Result.ObservationsShape(), backward.Result.ObservationsShape());
+        Assert.Equal(forward.Result.Outcome, backward.Result.Outcome);
+    }
+
+    [Fact]
     public void AnAbsentAncestorMakesTheBranchInferredMissingRatherThanQueried()
     {
         var source = ExistingObjectInputs.Source(

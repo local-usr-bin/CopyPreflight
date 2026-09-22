@@ -162,6 +162,82 @@ public class TargetExistingObjectRuleTests
     }
 
     [Fact]
+    public void AStructuralBlockIsReportedAtItsCauseEvenWhenTheInventoryDoesNotListIt()
+    {
+        // An inventory names objects, not the directories they sit in, so this path runs through a
+        // directory no entry mentions — and the target holds an ordinary file where that directory
+        // would go. The mapping is structurally blocked, so a run that reported nothing here would be
+        // presenting a blocked mapping as an unremarkable one.
+        var source = ExistingObjectInputs.Source(SourceEntry.File(@"Photos\2026\a.jpg", 1));
+
+        var (probe, _) = ExistingObjectInputs.Run(
+            source,
+            api => api
+                .WithAttribute(ExistingObjectInputs.TargetRoot, FileAttributes.Directory)
+                .WithAttribute(ExistingObjectInputs.Mapped("Photos"), FileAttributes.Normal));
+
+        var findings = source.EvaluateWith(ExistingObjectInputs.UsableTarget(), probe);
+
+        var conflict = Assert.Single(findings);
+
+        Assert.Equal(WindowsPreflightFindingCodes.TargetExistingTypeCollision, conflict.Code);
+        Assert.Equal(Severity.Error, conflict.Severity);
+        Assert.Equal("Photos", conflict.SourceRelativePath);
+
+        // The cause is what is reported, so it is stated once and the branch behind it is not also
+        // presented as a set of locations nobody looked at.
+        Assert.Empty(findings.WithCode(WindowsPreflightFindingCodes.TargetExistingFileCollision));
+        Assert.Empty(findings.WithCode(WindowsPreflightFindingCodes.TargetExistingObjectCoverageIncomplete));
+    }
+
+    [Fact]
+    public void AStructuralBlockAtAnAncestorDoesNotStopAnIndependentBranch()
+    {
+        var source = ExistingObjectInputs.Source(
+            SourceEntry.File(@"Photos\2026\a.jpg", 1),
+            SourceEntry.File("report.txt", 1));
+
+        var (probe, _) = ExistingObjectInputs.Run(
+            source,
+            api => api
+                .WithAttribute(ExistingObjectInputs.TargetRoot, FileAttributes.Directory)
+                .WithAttribute(ExistingObjectInputs.Mapped("Photos"), FileAttributes.Normal)
+                .WithAttributeFailureFor(
+                    ExistingObjectInputs.Mapped("report.txt"),
+                    ScriptedFileSystemApi.ErrorAccessDenied));
+
+        var findings = source.EvaluateWith(ExistingObjectInputs.UsableTarget(), probe);
+
+        var conflict = findings.Only(WindowsPreflightFindingCodes.TargetExistingTypeCollision);
+        Assert.Equal("Photos", conflict.SourceRelativePath);
+
+        // A branch stopped by a confirmed structural conflict is a finished conclusion, so it is not a
+        // coverage gap; the location whose own check failed is a genuine gap and is still reported as
+        // one. Neither fact is allowed to hide the other.
+        Assert.Single(findings.WithCode(WindowsPreflightFindingCodes.TargetExistingObjectCheckFailed));
+        Assert.Single(findings.WithCode(WindowsPreflightFindingCodes.TargetExistingObjectCoverageIncomplete));
+        Assert.Equal(3, findings.Count);
+    }
+
+    [Fact]
+    public void AnExistingFileOnADirectoryTheInventoryOnlyRunsThroughIsATypeConflict()
+    {
+        // The inventory lists only the object inside the directory, so the directory itself has no
+        // entry. It is a directory in the source all the same — a path cannot run through a file — and
+        // the file sitting on it is a structural conflict rather than a location with nothing to say.
+        var source = ExistingObjectInputs.Source(SourceEntry.File(@"media\2026\a.jpg", 1024));
+
+        var probe = ExistingObjectInputs.ProbeResult(
+            Observed("media", TargetObjectPresence.File));
+
+        var finding = Assert.Single(source.EvaluateWith(ExistingObjectInputs.UsableTarget(), probe));
+
+        Assert.Equal(WindowsPreflightFindingCodes.TargetExistingTypeCollision, finding.Code);
+        Assert.Equal(Severity.Error, finding.Severity);
+        Assert.Equal("media", finding.SourceRelativePath);
+    }
+
+    [Fact]
     public void ACollisionIsNeverDescribedAsAMatchOrAsACertainReplacement()
     {
         // Nothing about either file's content was read, so no finding may claim the two are the same,

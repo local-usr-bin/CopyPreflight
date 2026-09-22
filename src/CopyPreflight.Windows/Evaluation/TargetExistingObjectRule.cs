@@ -356,11 +356,18 @@ internal static class TargetExistingObjectRule
             };
 
     /// <summary>
-    /// Relates each observation to its source entry by the time-independent mapping identity: the
+    /// Relates each observation to its source object by the time-independent mapping identity: the
     /// relative path. The first entry for a repeated relative path is used; an inventory does not
     /// contain two different objects at one path, and matching on arrival order would make the result
     /// depend on an enumeration artifact.
     /// </summary>
+    /// <remarks>
+    /// A relative path that an observed entry lies below is a directory in the source, because the
+    /// mapping could not have named an object below a file. Those directories are indexed as what they
+    /// are, so that the structural conflict of an existing file sitting on one of them is reported even
+    /// when the inventory listed only the objects inside it. Nothing is invented: an explicit entry at
+    /// the same path always wins, and no other kind of source object is derived from a path shape.
+    /// </remarks>
     private static Dictionary<string, SourceEntry> IndexEntries(SourceScanResult source)
     {
         var entries = new Dictionary<string, SourceEntry>(StringComparer.Ordinal);
@@ -368,6 +375,16 @@ internal static class TargetExistingObjectRule
         foreach (var entry in source.Entries)
         {
             entries.TryAdd(entry.RelativePath, entry);
+        }
+
+        foreach (var entry in source.Entries)
+        {
+            for (var parent = SourceRelativePathComponents.ParentDirectory(entry.RelativePath);
+                 parent.Length > 0;
+                 parent = SourceRelativePathComponents.ParentDirectory(parent))
+            {
+                entries.TryAdd(parent, SourceEntry.Directory(parent));
+            }
         }
 
         return entries;

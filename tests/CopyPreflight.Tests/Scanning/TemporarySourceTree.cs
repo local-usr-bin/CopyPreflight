@@ -4,8 +4,8 @@ using System.IO;
 namespace CopyPreflight.Tests;
 
 /// <summary>
-/// A throwaway directory tree under the process temp directory, for tests that need real directories
-/// and files on disk.
+/// A throwaway directory tree inside the repository, for tests that need real directories and files
+/// on disk.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,9 +13,21 @@ namespace CopyPreflight.Tests;
 /// fixture: real paths the operating system actually answers questions about.
 /// </para>
 /// <para>
-/// Disposal deletes the tree. Reparse points are unlinked as themselves, and before the directories
-/// that contain them: deleting a directory tree that still contains a junction fails on Windows, and
-/// following one would delete what it points at.
+/// <b>The tree is created inside the checkout the tests belong to, not in the machine's shared temp
+/// directory.</b> The repository is the only tree these tests are entitled to write in, and the
+/// fixture must not depend on where an individual machine happens to put its temp files. The root
+/// below the repository is found by walking up from the test binary to the directory that holds the
+/// solution file, so no developer's user name and no absolute path is written into the source. When
+/// that directory cannot be found the constructor fails loudly instead of quietly falling back to a
+/// system temp path.
+/// </para>
+/// <para>
+/// Disposal deletes the trees this instance created, and nothing else: each tree is removed in full,
+/// and the shared parent directory the trees are created under is left alone because other test
+/// trees may still be using it. Reparse points are unlinked as themselves, and before the
+/// directories that contain them: deleting a directory tree that still contains a junction fails on
+/// Windows, and following one would delete what it points at — so removing a junction never removes
+/// what it points at.
 /// </para>
 /// <para>
 /// Nothing here changes security configuration, requires elevation or needs Developer Mode.
@@ -23,12 +35,56 @@ namespace CopyPreflight.Tests;
 /// </remarks>
 internal sealed class TemporarySourceTree : IDisposable
 {
+    /// <summary>
+    /// The file whose directory is taken to be the repository root. Any file agreed on by the whole
+    /// checkout would do; the solution file is the one every build of this repository starts from.
+    /// </summary>
+    private const string RepositoryMarkerFileName = "CopyPreflight.sln";
+
+    /// <summary>
+    /// The ignored directory below the repository root that holds every fixture tree.
+    /// </summary>
+    /// <remarks>
+    /// It is already covered by the repository's <c>artifacts/</c> ignore rule, so a fixture can
+    /// never show up as an untracked file. Resolved once and reused, so the walk happens at most once
+    /// per test run and a failure is reported directly rather than wrapped.
+    /// </remarks>
+    private static readonly Lazy<string> FixtureRootDirectory = new(ResolveFixtureRootDirectory);
+
     private readonly List<string> _externalDirectories = [];
 
     internal TemporarySourceTree()
     {
-        Root = Path.Combine(Path.GetTempPath(), "CopyPreflight.Tests-" + Guid.NewGuid().ToString("N"));
+        Root = Path.Combine(
+            FixtureRootDirectory.Value,
+            "CopyPreflight.Tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Root);
+    }
+
+    /// <summary>
+    /// The directory fixtures are created under: an ignored folder at the repository root.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// No directory at or above the test binary holds <see cref="RepositoryMarkerFileName"/>, so there
+    /// is no repository-owned place to create the fixture in.
+    /// </exception>
+    private static string ResolveFixtureRootDirectory()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, RepositoryMarkerFileName)))
+            {
+                return Path.Combine(directory.FullName, "artifacts", "test-fixtures");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Could not determine the fixture root: no directory containing '{RepositoryMarkerFileName}' "
+            + $"was found at or above the test binary's location '{AppContext.BaseDirectory}'. These tests "
+            + "create their fixture trees inside the repository they belong to and must not fall back to "
+            + "the system temp directory.");
     }
 
     /// <summary>Absolute path of the root directory of this tree.</summary>
@@ -54,10 +110,19 @@ internal sealed class TemporarySourceTree : IDisposable
         return path;
     }
 
-    /// <summary>Creates a directory outside the scanned tree and returns its absolute path.</summary>
+    /// <summary>
+    /// Creates a directory outside the scanned tree — but inside the same repository-owned fixture root
+    /// — and returns its absolute path.
+    /// </summary>
+    /// <remarks>
+    /// It is a sibling of the scanned tree rather than a child of it, so a junction into it is a
+    /// genuine reparse point that does not also place the target inside the tree being scanned.
+    /// </remarks>
     internal string CreateExternalDirectory()
     {
-        var path = Path.Combine(Path.GetTempPath(), "CopyPreflight.Tests-external-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(
+            FixtureRootDirectory.Value,
+            "CopyPreflight.Tests-external-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         _externalDirectories.Add(path);
         return path;

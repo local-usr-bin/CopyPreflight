@@ -6,9 +6,10 @@ namespace CopyPreflight.Windows;
 /// <remarks>
 /// <para>
 /// The result is a plain, inspectable value: the outcome of the run, what was established about the
-/// target root, and one observation per source object in the inventory it was given. It contains no
-/// <see cref="Finding"/> and no severity — deciding what any of it means for a migration is the rule
-/// layer's job.
+/// target root, and one observation per mapped location that was accounted for — every source object
+/// in the inventory it was given, plus any ordinary file that stopped a branch without being listed in
+/// the inventory itself. It contains no <see cref="Finding"/> and no severity — deciding what any of it
+/// means for a migration is the rule layer's job.
 /// </para>
 /// <para>
 /// What it says is deliberately narrow. It reports whether an object already occupies each mapped
@@ -28,7 +29,11 @@ public sealed class TargetExistingObjectProbeResult
 {
     /// <summary>Creates a result from the facts one run established.</summary>
     /// <param name="targetRoot">What the target root's own attribute query established.</param>
-    /// <param name="observations">One observation per source object in the inventory, in any order.</param>
+    /// <param name="observations">
+    /// One observation per mapped location that was accounted for: every source object in the
+    /// inventory, plus any ordinary file that stopped a branch without being listed itself, in any
+    /// order.
+    /// </param>
     /// <param name="outcome">How far the run got.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="targetRoot"/> or <paramref name="observations"/> is <see langword="null"/>.
@@ -90,9 +95,10 @@ public sealed class TargetExistingObjectProbeResult
     public TargetRootObservation TargetRoot { get; }
 
     /// <summary>
-    /// One observation per source object the check was given. The observation's
-    /// <see cref="ExistingObjectObservation.SourceRelativePath"/> relates it to its source entry, so
-    /// the order is not meaningful and a report must never depend on it.
+    /// One observation per mapped location that was accounted for: every source object the check was
+    /// given, plus any ordinary file that stopped a branch without being listed itself. The
+    /// observation's <see cref="ExistingObjectObservation.SourceRelativePath"/> relates it to its
+    /// source object, so the order is not meaningful and a report must never depend on it.
     /// </summary>
     public IReadOnlyList<ExistingObjectObservation> Observations { get; }
 

@@ -43,6 +43,13 @@ namespace CopyPreflight.Windows;
 /// the ancestor that explains them, so one root cause is reported once instead of once per descendant.
 /// </para>
 /// <para>
+/// <b>The object that stops a branch is recorded where it is.</b> An inventory names objects, not the
+/// directories they sit in, so a path may run through a directory the inventory never lists. The
+/// ordinary file that stops such a branch is therefore stated as a fact about its own mapped location,
+/// which is where the structural conflict will be reported, rather than being left implicit in the
+/// descendants it explains.
+/// </para>
+/// <para>
 /// <b>A name is queried as the mapping spells it, or not at all.</b> A component whose name cannot be
 /// queried without being reinterpreted — an illegal character, a reserved device name, a trailing
 /// space or period — would have to be normalised into a different name, and the answer would then
@@ -177,7 +184,8 @@ public sealed class WindowsTargetExistingObjectProbe
     /// </param>
     /// <returns>
     /// One observation per source entry, together with what was established about the target root and
-    /// how far the run got.
+    /// how far the run got. An ordinary file that stopped a branch is also observed, at its own mapped
+    /// location, when the inventory did not list that location itself.
     /// </returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="source"/> or <paramref name="target"/> is <see langword="null"/>.
@@ -247,15 +255,26 @@ public sealed class WindowsTargetExistingObjectProbe
         // differently and deciding that is not this milestone's to do.
         var resolvedLocations = new Dictionary<string, MappedLocation>(StringComparer.Ordinal);
 
+        // One observation per location, keyed by the mapping's exact identity. One location can be
+        // reached twice — once as a source entry of its own and once as the ancestor that stopped a
+        // deeper branch — and the same fact must not be stated twice.
+        var observedRelativePaths = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var entry in source.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            observations.Add(ObserveMappedLocation(
+            foreach (var observation in ObserveMappedLocation(
                 entry.RelativePath,
                 target.TargetDirectoryPath,
                 resolvedLocations,
-                cancellationToken));
+                cancellationToken))
+            {
+                if (observedRelativePaths.Add(observation.SourceRelativePath))
+                {
+                    observations.Add(observation);
+                }
+            }
         }
 
         var outcome = TargetExistingObjectProbeResult.HasFullCoverage(targetRoot, observations)
@@ -289,7 +308,11 @@ public sealed class WindowsTargetExistingObjectProbe
     }
 
     /// <summary>Examines the location one source object maps onto, ancestors first.</summary>
-    private ExistingObjectObservation ObserveMappedLocation(
+    /// <returns>
+    /// The observation for this location, preceded — when the branch is stopped by an ordinary file
+    /// ancestor — by an observation for that ancestor.
+    /// </returns>
+    private IReadOnlyList<ExistingObjectObservation> ObserveMappedLocation(
         string relativePath,
         string targetRoot,
         Dictionary<string, MappedLocation> resolvedLocations,
@@ -297,13 +320,16 @@ public sealed class WindowsTargetExistingObjectProbe
     {
         if (!IsComposableRelativePath(relativePath))
         {
-            return ExistingObjectObservation.NotQueried(
-                relativePath,
-                ExistingObjectGapReason.RelativePathNotQueryable,
-                blockingAncestorRelativePath: null,
-                nativeErrorCode: null,
-                RelativePathNotQueryableDiagnostic,
-                mappedTargetPath: null);
+            return
+            [
+                ExistingObjectObservation.NotQueried(
+                    relativePath,
+                    ExistingObjectGapReason.RelativePathNotQueryable,
+                    blockingAncestorRelativePath: null,
+                    nativeErrorCode: null,
+                    RelativePathNotQueryableDiagnostic,
+                    mappedTargetPath: null),
+            ];
         }
 
         var mappedPath = Path.Join(targetRoot, relativePath);
@@ -313,14 +339,17 @@ public sealed class WindowsTargetExistingObjectProbe
             // Querying a normalised spelling of this name would answer about a different object than the
             // mapping names, so nothing is asked at all. The naming rule still reports the name itself;
             // this milestone only declines to query through it.
-            return ExistingObjectObservation.NotQueried(
-                relativePath,
-                ExistingObjectGapReason.AmbiguousName,
-                blockingAncestorRelativePath: null,
-                nativeErrorCode: null,
-                $"The name component '{ambiguousComponent}' cannot be queried without being "
-                + "reinterpreted, so nothing was asked about this location.",
-                mappedPath);
+            return
+            [
+                ExistingObjectObservation.NotQueried(
+                    relativePath,
+                    ExistingObjectGapReason.AmbiguousName,
+                    blockingAncestorRelativePath: null,
+                    nativeErrorCode: null,
+                    $"The name component '{ambiguousComponent}' cannot be queried without being "
+                    + "reinterpreted, so nothing was asked about this location.",
+                    mappedPath),
+            ];
         }
 
         foreach (var ancestorRelativePath in AncestorsOf(relativePath))
@@ -335,65 +364,91 @@ public sealed class WindowsTargetExistingObjectProbe
                     continue;
 
                 case MappedLocationKind.File:
-                    // A file cannot contain anything, so no object can exist at this location. The
-                    // structural conflict belongs to the ancestor; repeating it for every descendant
-                    // would report one problem a great many times.
-                    return ExistingObjectObservation.NotQueried(
-                        relativePath,
-                        ExistingObjectGapReason.BlockedByExistingObject,
-                        ancestorRelativePath,
-                        nativeErrorCode: null,
-                        $"The ancestor '{ancestorRelativePath}' is an ordinary file, so no object can "
-                        + "exist at this location.",
-                        mappedPath);
+                    // A file cannot contain anything, so no object can exist at this location, and the
+                    // structural conflict belongs to the ancestor rather than to each descendant behind
+                    // it. The ancestor is therefore recorded as a mapped location of its own: it was
+                    // queried anyway, and an inventory is not obliged to spell out a directory entry for
+                    // a directory that its own paths run through. Without that record the conflict would
+                    // have nowhere to be reported and the whole branch would go unmentioned. Each
+                    // descendant keeps a reference to this ancestor instead of a conclusion of its own,
+                    // and the caller keeps one observation per location, so stating the ancestor here
+                    // cannot duplicate it.
+                    return
+                    [
+                        ExistingObjectObservation.Observed(
+                            ancestorRelativePath,
+                            Path.Join(targetRoot, ancestorRelativePath),
+                            TargetObjectPresence.File,
+                            FileDiagnostic),
+                        ExistingObjectObservation.NotQueried(
+                            relativePath,
+                            ExistingObjectGapReason.BlockedByExistingObject,
+                            ancestorRelativePath,
+                            nativeErrorCode: null,
+                            $"The ancestor '{ancestorRelativePath}' is an ordinary file, so no object can "
+                            + "exist at this location.",
+                            mappedPath),
+                    ];
 
                 case MappedLocationKind.ReparsePoint:
-                    return ExistingObjectObservation.NotQueried(
-                        relativePath,
-                        ExistingObjectGapReason.BlockedByReparsePoint,
-                        ancestorRelativePath,
-                        nativeErrorCode: null,
-                        $"The ancestor '{ancestorRelativePath}' is a reparse point, which is not looked "
-                        + "through, so nothing beneath it was queried.",
-                        mappedPath);
+                    return
+                    [
+                        ExistingObjectObservation.NotQueried(
+                            relativePath,
+                            ExistingObjectGapReason.BlockedByReparsePoint,
+                            ancestorRelativePath,
+                            nativeErrorCode: null,
+                            $"The ancestor '{ancestorRelativePath}' is a reparse point, which is not looked "
+                            + "through, so nothing beneath it was queried.",
+                            mappedPath),
+                    ];
 
                 case MappedLocationKind.Missing:
-                    return ExistingObjectObservation.InferredMissing(
-                        relativePath,
-                        mappedPath,
-                        ancestorRelativePath,
-                        ancestor.NativeErrorCode,
-                        $"The ancestor '{ancestorRelativePath}' is currently absent, so nothing can exist "
-                        + "at this location. This was derived from that ancestor and was not queried "
-                        + "here.");
+                    return
+                    [
+                        ExistingObjectObservation.InferredMissing(
+                            relativePath,
+                            mappedPath,
+                            ancestorRelativePath,
+                            ancestor.NativeErrorCode,
+                            $"The ancestor '{ancestorRelativePath}' is currently absent, so nothing can exist "
+                            + "at this location. This was derived from that ancestor and was not queried "
+                            + "here."),
+                    ];
 
                 default:
-                    return ExistingObjectObservation.NotQueried(
-                        relativePath,
-                        ExistingObjectGapReason.BlockedByFailedCheck,
-                        ancestorRelativePath,
-                        ancestor.NativeErrorCode,
-                        $"The ancestor '{ancestorRelativePath}' could not be checked, so nothing beneath "
-                        + "it was queried and nothing is claimed about this location.",
-                        mappedPath);
+                    return
+                    [
+                        ExistingObjectObservation.NotQueried(
+                            relativePath,
+                            ExistingObjectGapReason.BlockedByFailedCheck,
+                            ancestorRelativePath,
+                            ancestor.NativeErrorCode,
+                            $"The ancestor '{ancestorRelativePath}' could not be checked, so nothing beneath "
+                            + "it was queried and nothing is claimed about this location.",
+                            mappedPath),
+                    ];
             }
         }
 
         var location = Resolve(mappedPath, resolvedLocations);
 
-        return location.Kind switch
-        {
-            MappedLocationKind.Directory => ExistingObjectObservation.Observed(
-                relativePath, mappedPath, TargetObjectPresence.Directory, DirectoryDiagnostic),
-            MappedLocationKind.File => ExistingObjectObservation.Observed(
-                relativePath, mappedPath, TargetObjectPresence.File, FileDiagnostic),
-            MappedLocationKind.ReparsePoint => ExistingObjectObservation.Observed(
-                relativePath, mappedPath, TargetObjectPresence.ReparsePoint, ReparsePointDiagnostic),
-            MappedLocationKind.Missing => ExistingObjectObservation.ObservedMissing(
-                relativePath, mappedPath, location.NativeErrorCode, MissingDiagnostic),
-            _ => ExistingObjectObservation.CheckFailed(
-                relativePath, mappedPath, location.NativeErrorCode, NotAnsweredDiagnostic),
-        };
+        return
+        [
+            location.Kind switch
+            {
+                MappedLocationKind.Directory => ExistingObjectObservation.Observed(
+                    relativePath, mappedPath, TargetObjectPresence.Directory, DirectoryDiagnostic),
+                MappedLocationKind.File => ExistingObjectObservation.Observed(
+                    relativePath, mappedPath, TargetObjectPresence.File, FileDiagnostic),
+                MappedLocationKind.ReparsePoint => ExistingObjectObservation.Observed(
+                    relativePath, mappedPath, TargetObjectPresence.ReparsePoint, ReparsePointDiagnostic),
+                MappedLocationKind.Missing => ExistingObjectObservation.ObservedMissing(
+                    relativePath, mappedPath, location.NativeErrorCode, MissingDiagnostic),
+                _ => ExistingObjectObservation.CheckFailed(
+                    relativePath, mappedPath, location.NativeErrorCode, NotAnsweredDiagnostic),
+            },
+        ];
     }
 
     /// <summary>Queries one location, remembering the answer for the rest of this run.</summary>

@@ -9,9 +9,10 @@ namespace CopyPreflight.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// These tests use only paths that exist on any Windows machine — the process temp directory and paths
-/// below it. They require no network share, no quota, no mounted volume, no elevation and no Developer
-/// Mode, and they never hardcode which file system the test machine happens to use.
+/// These tests use only paths the test owns: a throwaway tree created under an ignored directory inside
+/// this repository (see <see cref="TemporarySourceTree"/>), which needs no network share, no quota, no
+/// mounted volume, no elevation and no Developer Mode, and never hardcodes which file system the test
+/// machine happens to use or where it puts its temp files.
 /// </para>
 /// <para>
 /// The directory junctions used here are created with <c>mklink /J</c>, which any Windows user can
@@ -101,6 +102,16 @@ public class TargetExistingObjectProbeIntegrationTests
         Assert.Equal(3, findings.Count);
     }
 
+    /// <summary>
+    /// The check leaves the tree it examined as it found it.
+    /// </summary>
+    /// <remarks>
+    /// What this compares is the observable shape of the target: every entry below it, and the length of
+    /// every file in it. That is evidence that the check created nothing and wrote through nothing. It is
+    /// not a system-level audit — it says nothing about metadata such as timestamps, nothing about the
+    /// source tree, and nothing about anything outside this fixture. The stronger evidence for the same
+    /// claim is the call chain itself, which reaches one attribute query and no write entry point at all.
+    /// </remarks>
     [Fact]
     public void WritesNothingIntoTheSourceOrTheTarget()
     {
@@ -179,6 +190,53 @@ public class TargetExistingObjectProbeIntegrationTests
         // not follow a reparse point and does not remove one.
         Assert.True(Directory.Exists(junction));
         Assert.True(File.Exists(externalFile));
+    }
+
+    [Fact]
+    public void ReportsAStructuralBlockAtAPathTheInventoryNeverLists()
+    {
+        using var tree = new TemporarySourceTree();
+        var target = tree.CreateDirectory("target");
+
+        // An ordinary file where the source path expects a directory, and no source entry for that
+        // directory itself: the block has to be established from the anomaly alone, not from a
+        // directory entry happening to be in the inventory.
+        var blockingFile = tree.CreateFile(@"target\archive", lengthInBytes: 6);
+
+        var source = new SourceScanResult(
+            @"C:\source",
+            [SourceEntry.File(@"archive\2026\report.txt", 10)],
+            []);
+
+        var probeResult = new WindowsTargetExistingObjectProbe().Probe(
+            source,
+            new WindowsTargetCapabilityProbe().Probe(target));
+
+        var blockingAncestor = probeResult.ObservationFor("archive");
+
+        Assert.Equal(TargetObjectPresence.File, blockingAncestor.Presence);
+
+        var descendant = probeResult.ObservationFor(@"archive\2026\report.txt");
+
+        Assert.Equal(ExistingObjectObservationKind.NotQueried, descendant.Kind);
+        Assert.Equal(ExistingObjectGapReason.BlockedByExistingObject, descendant.GapReason);
+        Assert.Equal("archive", descendant.BlockingAncestorRelativePath);
+        Assert.Equal(TargetExistingObjectProbeOutcome.Completed, probeResult.Outcome);
+
+        var findings = new WindowsPreflightEvaluator().Evaluate(
+            source,
+            new WindowsTargetCapabilityProbe().Probe(target),
+            probeResult);
+
+        var conflict = findings.Only(WindowsPreflightFindingCodes.TargetExistingTypeCollision);
+
+        Assert.Equal(Severity.Error, conflict.Severity);
+        Assert.Equal("archive", conflict.SourceRelativePath);
+
+        // The blocked mapping was neither created nor repaired, and the file that blocks it is untouched.
+        Assert.Equal(6, new FileInfo(blockingFile).Length);
+        Assert.False(Directory.Exists(tree.PathOf(@"target\archive\2026")));
+        Assert.Empty(findings.WithCode(WindowsPreflightFindingCodes.TargetExistingObjectCoverageIncomplete));
     }
 
     /// <summary>

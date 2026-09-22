@@ -242,6 +242,9 @@ Finding
 - **`TargetCapabilities` 未被扩展**：逐项观测结果不放进 `FileSystemName` / `AvailableFreeBytes` /
   `MaxPathComponentLength`，而是单独用 `TargetExistingObjectProbeResult` 表达。
 - **规则层仍然零 I/O**：`TargetExistingObjectRule` 不调用任何 Win32 API；做 I/O 的是探测器。
+- **事实按位置对齐**：每个被确认的位置只有一条观测。挡路的普通文件会被记录在它自己的映射位置上
+  （即使 inventory 没有列出该目录），规则层则把"某个 entry 的祖先"也当作目录来判定映射——
+  因此结构阻断不依赖某个目录 entry 恰好存在，也不会因为源头只列了目录里面的对象而被漏掉。
 - **评估入口向后兼容**：`WindowsPreflightEvaluator` 追加了一个三参数重载；
   原两参数重载保留，其语义被明确为"未做检查 → `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED`（Info）"，
   绝不冒充"目标干净"。
