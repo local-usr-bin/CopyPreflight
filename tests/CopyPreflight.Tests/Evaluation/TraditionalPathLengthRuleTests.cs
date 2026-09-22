@@ -24,7 +24,7 @@ public class TraditionalPathLengthRuleTests
     [InlineData(250, 260, true)]
     [InlineData(251, 261, true)]
     [InlineData(299, 309, true)]
-    public void TheClassicLimitStartsAtTwoHundredAndSixtyCharacters(
+    public void TheFileLimitStartsAtTwoHundredAndSixtyCharacters(
         int relativePathLength,
         int expectedDestinationLength,
         bool expectWarning)
@@ -54,6 +54,87 @@ public class TraditionalPathLengthRuleTests
         }
     }
 
+    [Theory]
+    // Classic CreateDirectory must still be able to append an 8.3 name, so an ordinary directory
+    // path is limited to MAX_PATH - 12 = 248 characters rather than to MAX_PATH itself.
+    [InlineData(237, 247, false)]
+    [InlineData(238, 248, false)]
+    [InlineData(239, 249, true)]
+    [InlineData(250, 260, true)]
+    public void TheDirectoryLimitStartsAtTwoHundredAndFortyEightCharacters(
+        int relativePathLength,
+        int expectedDestinationLength,
+        bool expectWarning)
+    {
+        var relativePath = new string('d', relativePathLength);
+        var destinationPath = Path.Join(PreflightInputs.TargetRoot, relativePath);
+
+        Assert.Equal(expectedDestinationLength, destinationPath.Length);
+
+        var source = PreflightInputs.Source(SourceEntry.Directory(relativePath));
+        var findings = PreflightInputs.Evaluate(source, PreflightInputs.HealthyTarget())
+            .WithCode(WindowsPreflightFindingCodes.TraditionalPathLengthRisk);
+
+        if (expectWarning)
+        {
+            var finding = Assert.Single(findings);
+
+            Assert.Equal(Severity.Warning, finding.Severity);
+            Assert.Equal(relativePath, finding.SourceRelativePath);
+            Assert.Contains(destinationPath, finding.Explanation, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Empty(findings);
+        }
+    }
+
+    [Fact]
+    public void ADirectoryIsJudgedByItsOwnShorterLimitRatherThanTheFileLimit()
+    {
+        // A directory path between 249 and 259 characters is already a classic directory-creation
+        // risk, while a file of the same path length is still within the general MAX_PATH limit.
+        var relativePath = new string('d', 245);
+        var destinationPath = Path.Join(PreflightInputs.TargetRoot, relativePath);
+
+        Assert.Equal(255, destinationPath.Length);
+
+        var directoryFindings = PreflightInputs.Evaluate(
+            PreflightInputs.Source(SourceEntry.Directory(relativePath)),
+            PreflightInputs.HealthyTarget());
+
+        var fileFindings = PreflightInputs.Evaluate(
+            PreflightInputs.Source(SourceEntry.File(relativePath, 1)),
+            PreflightInputs.HealthyTarget());
+
+        Assert.Single(directoryFindings.WithCode(WindowsPreflightFindingCodes.TraditionalPathLengthRisk));
+        Assert.Empty(fileFindings.WithCode(WindowsPreflightFindingCodes.TraditionalPathLengthRisk));
+    }
+
+    [Theory]
+    // A reparse point's shape does not decide how it would be recreated, so it keeps the general
+    // limit and is never handed a directory-creation conclusion the model cannot support.
+    [InlineData(249, 259, false)]
+    [InlineData(250, 260, true)]
+    public void AReparsePointShapedLikeADirectoryKeepsTheGeneralLimit(
+        int relativePathLength,
+        int expectedDestinationLength,
+        bool expectWarning)
+    {
+        var relativePath = new string('r', relativePathLength);
+        var destinationPath = Path.Join(PreflightInputs.TargetRoot, relativePath);
+
+        Assert.Equal(expectedDestinationLength, destinationPath.Length);
+
+        var findings = PreflightInputs.Evaluate(
+                PreflightInputs.Source(SourceEntry.ReparsePoint(relativePath, SourceEntryKind.Directory)),
+                PreflightInputs.HealthyTarget())
+            .WithCode(WindowsPreflightFindingCodes.TraditionalPathLengthRisk);
+
+        Assert.Equal(expectWarning ? 1 : 0, findings.Count);
+        Assert.All(findings, finding => Assert.Equal(Severity.Warning, finding.Severity));
+    }
+
     [Fact]
     public void TheFindingNeverClaimsThatTheCopyIsCertainToFail()
     {
@@ -76,12 +157,13 @@ public class TraditionalPathLengthRuleTests
 
     [Theory]
     [InlineData(@"\\?\C:\")]
-    [InlineData(@"\\.\C:\")]
     [InlineData(@"\\?\UNC\server\share\")]
-    public void APathOutsideClassicHandlingIsNotJudgedByTheClassicLimit(string targetPrefix)
+    // The prefix itself is case-insensitive, so the UNC form is recognised in either casing.
+    [InlineData(@"\\?\unc\server\share\")]
+    public void APathInTheExtendedLengthNamespaceIsNotJudgedByTheClassicLimit(string targetPrefix)
     {
-        // A path rooted in one of these Win32 namespaces is passed on without classic path handling,
-        // so the MAX_PATH heuristic does not describe it.
+        // A path rooted in the extended-length file namespace is passed on without classic path
+        // handling, so the MAX_PATH heuristics do not describe it.
         var targetDirectoryPath = targetPrefix + new string('d', 300);
         var relativePath = "a.txt";
         var destinationPath = Path.Join(targetDirectoryPath, relativePath);
@@ -95,6 +177,29 @@ public class TraditionalPathLengthRuleTests
         var findings = PreflightInputs.Evaluate(source, target);
 
         Assert.Empty(findings.WithCode(WindowsPreflightFindingCodes.TraditionalPathLengthRisk));
+    }
+
+    [Theory]
+    [InlineData(@"\\.\C:\")]
+    [InlineData(@"\\.\")]
+    public void TheDeviceNamespaceIsNotALongPathExemption(string targetPrefix)
+    {
+        // \\.\  is the Win32 device namespace, which exists for device access. It is not the
+        // extended-length file prefix, so it does not exempt a path from classic MAX_PATH handling.
+        var targetDirectoryPath = targetPrefix + new string('d', 300);
+        var relativePath = "a.txt";
+        var destinationPath = Path.Join(targetDirectoryPath, relativePath);
+
+        Assert.True(destinationPath.Length >= 260, "the fixture must compose a path beyond MAX_PATH");
+
+        var source = PreflightInputs.Source(SourceEntry.File(relativePath, 1));
+        var target = PreflightInputs.HealthyTarget(targetDirectoryPath);
+
+        var finding = PreflightInputs.Evaluate(source, target)
+            .Only(WindowsPreflightFindingCodes.TraditionalPathLengthRisk);
+
+        Assert.Equal(Severity.Warning, finding.Severity);
+        Assert.Contains(destinationPath, finding.Explanation, StringComparison.Ordinal);
     }
 
     [Fact]

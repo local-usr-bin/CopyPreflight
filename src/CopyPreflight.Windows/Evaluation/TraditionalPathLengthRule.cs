@@ -14,9 +14,11 @@ namespace CopyPreflight.Windows;
 /// </para>
 /// <para>
 /// Classic Windows path handling works with a <c>MAX_PATH</c> of 260 characters <i>including</i> the
-/// terminating null, so a path of 260 characters or more already leaves no room for it. Such a path
-/// is reported as a <see cref="Severity.Warning"/> and never as an Error, because the outcome is not
-/// decided by the path alone.
+/// terminating null, so a path of 260 characters or more already leaves no room for it. Classic
+/// directory creation is stricter still: <c>CreateDirectory</c> must be able to append an 8.3 name
+/// to the directory it is given, so an ordinary directory path may not exceed <c>MAX_PATH - 12</c>
+/// (248) characters. Both are reported as a <see cref="Severity.Warning"/> and never as an Error,
+/// because the outcome is not decided by the path alone.
 /// </para>
 /// <para>
 /// What actually happens depends on the program that performs the copy and on the environment it
@@ -26,10 +28,12 @@ namespace CopyPreflight.Windows;
 /// the system setting alone cannot tell us what a future copy program will do.
 /// </para>
 /// <para>
-/// When the destination path is already expressed in a namespace that does not go through classic
-/// path handling, the classic limit does not describe it and the warning is not raised. This is
-/// deliberately a minimal check of the documented Win32 namespace prefixes, not a general NT path
-/// namespace parser: anything else is judged as the ordinary path it is.
+/// Only the Win32 extended-length <b>file</b> namespace prefix <c>\\?\</c> (including
+/// <c>\\?\UNC\…</c>) takes a destination path out of classic path handling, so only that prefix
+/// suppresses the warning. The <c>\\.\</c> device namespace is <b>not</b> a long-path exemption and
+/// is judged as the ordinary path it is. This is deliberately a minimal check of the documented
+/// extended-length prefix, not a general NT path namespace parser: anything else is judged as the
+/// ordinary path it is.
 /// </para>
 /// </remarks>
 internal static class TraditionalPathLengthRule
@@ -39,13 +43,17 @@ internal static class TraditionalPathLengthRule
     /// </summary>
     private const int MaxPath = 260;
 
-    /// <summary>The Win32 extended-length prefix, which is passed on without classic path handling.</summary>
-    private const string ExtendedLengthPrefix = @"\\?\";
+    /// <summary>
+    /// The classic directory-creation limit, <c>MAX_PATH - 12</c>: classic <c>CreateDirectory</c>
+    /// must still be able to append an 8.3 name to the path it is handed.
+    /// </summary>
+    private const int DirectoryPathLimit = MaxPath - 12;
 
     /// <summary>
-    /// The Win32 device namespace prefix, which likewise does not go through classic path handling.
+    /// The Win32 extended-length file namespace prefix, the only prefix under which a path is
+    /// passed on without classic path handling.
     /// </summary>
-    private const string DeviceNamespacePrefix = @"\\.\";
+    private const string ExtendedLengthPrefix = @"\\?\";
 
     internal static IEnumerable<Finding> Evaluate(SourceScanResult source, string targetDirectoryPath)
     {
@@ -53,24 +61,40 @@ internal static class TraditionalPathLengthRule
         {
             var destinationPath = Path.Join(targetDirectoryPath, entry.RelativePath);
 
-            if (UsesNonClassicNamespace(destinationPath) || destinationPath.Length < MaxPath)
+            if (UsesExtendedLengthNamespace(destinationPath))
             {
                 continue;
             }
 
-            yield return CreateFinding(entry.RelativePath, destinationPath);
+            // An ordinary directory is recreated with CreateDirectory, whose documented limit is
+            // shorter than the general classic path limit. A reparse point's shape says nothing
+            // about how it would be recreated, so it is judged by the general limit instead of
+            // being handed a directory-creation conclusion this milestone cannot honestly support.
+            var isOrdinaryDirectory = !entry.IsReparsePoint && entry.Kind == SourceEntryKind.Directory;
+
+            if (isOrdinaryDirectory)
+            {
+                if (destinationPath.Length > DirectoryPathLimit)
+                {
+                    yield return CreateDirectoryFinding(entry.RelativePath, destinationPath);
+                }
+            }
+            else if (destinationPath.Length >= MaxPath)
+            {
+                yield return CreateFileFinding(entry.RelativePath, destinationPath);
+            }
         }
     }
 
     /// <summary>
-    /// Whether the path is rooted in a namespace Windows passes on without applying classic
-    /// <c>MAX_PATH</c> handling, so the length heuristic above does not describe it.
+    /// Whether the path is rooted in the Win32 extended-length file namespace, which Windows passes
+    /// on without applying classic <c>MAX_PATH</c> handling, so the length heuristics above do not
+    /// describe it.
     /// </summary>
-    private static bool UsesNonClassicNamespace(string path)
-        => path.StartsWith(ExtendedLengthPrefix, StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith(DeviceNamespacePrefix, StringComparison.OrdinalIgnoreCase);
+    private static bool UsesExtendedLengthNamespace(string path)
+        => path.StartsWith(ExtendedLengthPrefix, StringComparison.OrdinalIgnoreCase);
 
-    private static Finding CreateFinding(string relativePath, string destinationPath)
+    private static Finding CreateFileFinding(string relativePath, string destinationPath)
         => new(
             WindowsPreflightFindingCodes.TraditionalPathLengthRisk,
             Severity.Warning,
@@ -79,11 +103,30 @@ internal static class TraditionalPathLengthRule
             + $"'{destinationPath}', which is {destinationPath.Length} characters long. Classic "
             + $"Windows path handling allows {MaxPath} characters including the terminating null, so "
             + "a path of this length leaves no room for one.",
-            "This is a compatibility risk rather than a certain failure. A copy program that is "
-            + "long-path aware may handle the path — long path support arrived with Windows 10 "
-            + "version 1607 — while a program that relies on classic path handling may fail or refuse "
-            + "it. Which of those applies depends on the copy program you use and on its environment.",
-            "If the copy program you intend to use cannot handle long paths, shorten the target "
-            + "directory or the source structure before copying.",
+            CompatibilityRiskImpact,
+            CompatibilityRiskRecommendation,
             sourceRelativePath: relativePath);
+
+    private static Finding CreateDirectoryFinding(string relativePath, string destinationPath)
+        => new(
+            WindowsPreflightFindingCodes.TraditionalPathLengthRisk,
+            Severity.Warning,
+            "Destination path is beyond the classic Windows path limit",
+            $"Following the source-to-target mapping, this directory would be created as "
+            + $"'{destinationPath}', which is {destinationPath.Length} characters long. Classic "
+            + $"Windows directory creation allows at most {DirectoryPathLimit} characters, because "
+            + "the directory path must still leave room to append an 8.3 file name.",
+            CompatibilityRiskImpact,
+            CompatibilityRiskRecommendation,
+            sourceRelativePath: relativePath);
+
+    private const string CompatibilityRiskImpact =
+        "This is a compatibility risk rather than a certain failure. A copy program that is "
+        + "long-path aware may handle the path — long path support arrived with Windows 10 "
+        + "version 1607 — while a program that relies on classic path handling may fail or refuse "
+        + "it. Which of those applies depends on the copy program you use and on its environment.";
+
+    private const string CompatibilityRiskRecommendation =
+        "If the copy program you intend to use cannot handle long paths, shorten the target "
+        + "directory or the source structure before copying.";
 }

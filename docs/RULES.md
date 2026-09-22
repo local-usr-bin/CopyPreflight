@@ -140,20 +140,31 @@ public sealed class WindowsPreflightEvaluator
 
 - 按冻结映射计算每个 entry 的最终目标路径：`Path.Join(targetDirectory, relativePath)`。
   不做额外规范化，路径按它真正会被拼成的样子判断。
-- 传统 Win32 路径处理允许 `MAX_PATH = 260` 个字符（**含**结尾 null），因此
-  **路径长度 ≥ 260 → Warning**。260 本身就已经没有位置放结尾 null。
+- **两个边界，取决于该 entry 在目标处会被怎样创建：**
+
+  | entry | 传统 Win32 边界 | 触发条件 |
+  | --- | --- | --- |
+  | 普通文件（`Kind == File`，非 reparse point） | `MAX_PATH = 260`（**含**结尾 null） | `长度 ≥ 260` |
+  | 普通目录（`Kind == Directory`，非 reparse point） | `MAX_PATH - 12 = 248` | `长度 > 248` |
+
+  - 文件：260 本身就已经没有位置放结尾 null，因此 `259 → 不触发`、`260 → 触发`。
+  - 目录：传统 `CreateDirectory` 必须还能在本目录路径后追加一个 8.3 名字（12 个字符），
+    因此目录路径不能超过 `MAX_PATH - 12`，即 `248 → 不触发`、`249 → 触发`。
+    这也是同样的 destination 长度下，目录比文件更早告警的原因。
+  - **reparse point 不属于上表任何一行的"普通"情形**：M4 不知道它会被如何重建（复制对象本身 /
+    跟随 / 跳过），因此绝不为它套用"目录创建"这条更严格的结论，一律按**通用边界 260** 判断。
+    这是刻意的保守选择，不是遗漏。
 - 这是 **Warning，不是 Error**。文本必须同时说清：这是传统 Windows / 应用兼容性风险；
   Windows 10 1607 起系统层面有了 long path 支持，但**只有本身就 long-path aware 的程序**才能受益；
   实际结果取决于用户选用的复制程序与运行环境。
 - **绝不**写成"超过 260 字符一定无法复制"；也**不读取**本机的 `LongPathsEnabled` 开关，
   再据此宣布用户未来实际会用的复制工具一定支持——系统开关本身无法推断具体复制程序的行为。
-- 若目标目录已经处于
-  - `\\?\`（Win32 extended-length 命名空间）
-  - `\\.\`（Win32 device 命名空间）
-
-  前缀下（`\\\\?\UNC\server\share` 也包含在内），该路径不经传统路径处理，本启发式不适用，
-  **不产生**该 Warning。这是一次对**有文档依据的 Win32 命名空间前缀**的最小判断，
+- **只有 Win32 extended-length 文件命名空间前缀 `\\?\`**（`\\?\UNC\server\share` 也包含在内，
+  前缀本身大小写不敏感）才让目的地路径不经传统路径处理，本启发式不适用，**不产生**该 Warning。
+  这是一次对**有文档依据的 extended-length 前缀**的最小判断，
   **不是**完整的 NT path namespace parser；除此之外一律按普通路径处理。
+- `\\.\` 是 Win32 **device 命名空间**（用于设备访问），**不是** long-path 豁免。
+  以 `\\.\` 开头的路径**不再**因为前缀本身被跳过，而是与普通路径一样接受上表的长度判断。
 
 ### 4.7 reparse point → Warning
 
