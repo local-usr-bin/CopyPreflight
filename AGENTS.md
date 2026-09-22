@@ -18,9 +18,9 @@
 | 项目 | 类型 | 职责 | 依赖 |
 | --- | --- | --- | --- |
 | `src/CopyPreflight.Core` | 类库 (`net10.0`) | 扫描、目标能力模型、规则、findings（见 `docs/ARCHITECTURE.md`） | 无 |
-| `src/CopyPreflight.Windows` | 类库 (`net10.0-windows`) | 目标能力探测的 Windows 实现：Win32 interop、Windows 卷 / 目标发现 | → Core |
-| `src/CopyPreflight.App` | WPF (`net10.0-windows`) | 表现层与用户交互 | → Core |
-| `tests/CopyPreflight.Tests` | xUnit (`net10.0-windows`) | 测试 | → Core, Windows |
+| `src/CopyPreflight.Windows` | 类库 (`net10.0-windows`) | 目标能力探测的 Windows 实现、已存在对象探测、规则评估、检查编排（Win32 interop、Windows 卷 / 目标发现） | → Core |
+| `src/CopyPreflight.App` | WPF (`net10.0-windows`) | 表现层与用户交互 | → Core, Windows |
+| `tests/CopyPreflight.Tests` | xUnit (`net10.0-windows`) | 测试 | → Core, Windows, App |
 
 **硬约束：**
 

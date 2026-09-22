@@ -1,7 +1,22 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!--
+      The presentation layer drives the check workflow, which lives in the Windows layer next to the
+      probes and the rules it orchestrates. The reference points one way only: Core and Windows know
+      nothing about this project, and no UI type crosses back over it.
+    -->
     <ProjectReference Include="..\CopyPreflight.Core\CopyPreflight.Core.csproj" />
+    <ProjectReference Include="..\CopyPreflight.Windows\CopyPreflight.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The presentation state machine is internal on purpose: it is not product API, and it is the part
+      of the interface whose behaviour is worth asserting without a window. Tests reach it, and the
+      window it belongs to, through this.
+    -->
+    <InternalsVisibleTo Include="CopyPreflight.Tests" />
   </ItemGroup>
 
   <PropertyGroup>

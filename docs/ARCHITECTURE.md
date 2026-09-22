@@ -57,6 +57,11 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 它**不包含**判断逻辑：UI 不做规则判定，只呈现 Core 给出的结果。
 
+M7 起，这一职责被明确拆成两半：**编排**（按固定顺序调用 scanner / 目标探测 / 评估器，并把"运行状态 /
+覆盖情况 / 风险"三个维度分开表达，见 §4.7）放在 `CopyPreflight.Windows` 的 `Workflow/`，与
+`WindowsPreflightEvaluator` 同属一个程序集；**呈现**（状态机、绑定与文案）放在 `CopyPreflight.App` 的
+`Presentation/`。呈现层不含任何规则判定，也不自己调用 Win32；它只把编排层的产物翻译成窗口可绑定的文本与行。
+
 ## 2. 三个核心问题
 
 各层之间的分工可以用三个问题概括：
@@ -77,9 +82,10 @@ finding 是**描述性的**，它不触发任何变更操作。
 - `CopyPreflight.Core` —— 承载 1.1–1.4 的职责，**不依赖 WPF**，**不依赖** `CopyPreflight.App` 或
   `CopyPreflight.Windows`；保持 `net10.0`，不含 Win32 P/Invoke。
 - `CopyPreflight.Windows` —— 承载 1.2 的 Windows 具体实现（Win32 interop、Windows 卷 / 目标发现、
-  M6 的已存在对象探测）与 1.3 的规则评估（见 §4.4），引用 `CopyPreflight.Core`。平台限定为 `net10.0-windows`。
-- `CopyPreflight.App` —— 承载 1.5，引用 `CopyPreflight.Core`。
-- `CopyPreflight.Tests` —— 引用 `CopyPreflight.Core` 与 `CopyPreflight.Windows`。
+  M6 的已存在对象探测）、1.3 的规则评估（见 §4.4），以及 M7 的检查编排（见 §4.7），
+  引用 `CopyPreflight.Core`。平台限定为 `net10.0-windows`。
+- `CopyPreflight.App` —— 承载 1.5，引用 `CopyPreflight.Core` 与 `CopyPreflight.Windows`（编排层在这里）。
+- `CopyPreflight.Tests` —— 引用 `CopyPreflight.Core`、`CopyPreflight.Windows` 与 `CopyPreflight.App`。
 
 依赖方向单向指向 Core。Core 保持与 UI 技术和平台无关，从而使扫描与领域模型可以在没有 UI、
 也不需要 Win32 的情况下被思考与测试。
@@ -87,7 +93,8 @@ finding 是**描述性的**，它不触发任何变更操作。
 > M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1），
 > M2 确定了源扫描器的公开契约与结果模型（见 §4.2），M3 确定了目标能力探测的 Windows 实现与契约（见 §4.3），
 > M4 确定了规则评估的入口与已实现规则（见 §4.4），M5 在其中加入了 Windows 命名兼容性规则（见 §4.5），
-> M6 加入了目标已存在对象 / 碰撞的只读探测与对应规则（见 §4.6）。依赖方向自始至终未变。
+> M6 加入了目标已存在对象 / 碰撞的只读探测与对应规则（见 §4.6），M7 加入了检查编排与最小 WPF 接入（见 §4.7）。
+> 依赖方向自始至终未变：`App → Windows → Core`。
 
 ## 4. 本阶段已确定 / 未确定的事
 
@@ -165,7 +172,7 @@ M4 实现了 §1.3 的第一版规则层，也是第一次真正产出 §1.4 的
 | 职责 | 类型 | 语义 |
 | --- | --- | --- |
 | 1.3 rule evaluation | `WindowsPreflightEvaluator` | 消费 `SourceScanResult` 与 `TargetProbeResult`，产出 `Finding` 列表；同步、无状态、纯计算 |
-| 1.3 rule evaluation | `WindowsPreflightFindingCodes` | 当前已实现规则的稳定 code 常量（M4 的 12 个 + M5 的 4 个），供日志与测试匹配；**不是** registry |
+| 1.3 rule evaluation | `WindowsPreflightFindingCodes` | 当前已实现规则的稳定 code 常量（M4 的 12 个 + M5 的 4 个 + M6 的 8 个 = 24 个），供日志与测试匹配；**不是** registry |
 
 关键边界：
 
@@ -252,7 +259,63 @@ Finding
   `CopyPreflight.Windows`（`Probing/`），Core 保持 `net10.0` 且无 P/Invoke。
 - 语义细节见 [`TARGET_PROBING.md`](TARGET_PROBING.md) §13 与 [`RULES.md`](RULES.md) §4.12。
 
-### 4.7 仍未确定
+### 4.7 M7 已确定：检查编排与最小 WPF 接入
+
+M7 把 M2–M6 的各层真正串成一次可执行的检查，并接上一个最小可用的 WPF 界面。它不新增任何检查规则，
+也不改变任何 Finding 的语义与文本；它只决定"按什么顺序调用、如何报告、如何取消、如何展示"。
+
+```text
+PreflightRequest（两个原样保留的路径 + 运行标识）
+        │
+        ▼
+PreflightWorkflow.RunAsync / Run            （唯一一处线程切换；阶段固定顺序；阶段之间检查取消）
+        │
+        ├─ SourceScanner.Scan                   → SourceScanResult    （M2，真实实现）
+        ├─ WindowsTargetCapabilityProbe.Probe    → TargetProbeResult   （M3，真实实现）
+        ├─ WindowsTargetExistingObjectProbe.Probe→ TargetExistingObjectProbeResult（M6，真实实现）
+        └─ WindowsPreflightEvaluator.Evaluate(source, target, existingObjects)（三参数重载）
+        │
+        ▼
+PreflightRunResult（status / coverage / findings 三个维度，互不折叠）
+        │
+        ▼
+CheckViewModel（状态机 + 文案 + FindingRow[]）→ MainWindow（只绑定与转发）
+```
+
+| 职责 | 类型 | 语义 |
+| --- | --- | --- |
+| 1.5 编排 | `PreflightRequest` / `PreflightRequestError` | 两个路径**原样保留**（不 trim、不规范化）；只做"非空 + 完全限定路径"检查；携带 `RequestId` |
+| 1.5 编排 | `PreflightWorkflow` | 同步内核 + 一次 `Task.Run` 跳转；阶段顺序固定；阶段之间 `ThrowIfCancellationRequested`；取消与异常都返回结果，不抛 faulted task |
+| 1.5 编排 | `PreflightRunPhase` / `PreflightRunProgress` | 阶段枚举与进度快照；快照携带 `RequestId`，因此迟到/跨运行的快照不会污染新运行 |
+| 1.5 编排 | `PreflightRunStatus` / `PreflightPhaseCoverage` / `PreflightCoverage` | 运行状态、单阶段覆盖度、整体覆盖度。`HasGaps` 可单独查询 |
+| 1.5 编排 | `PreflightRunFailure` / `PreflightRunResult` | 失败原因与最终结果；构造函数拒绝自相矛盾的组合 |
+| 1.5 呈现 | `CheckViewModel` / `CheckState` / `PreflightText` / `FindingRow` | 状态机、文案与结果行；**不含任何 WPF 类型**，可在没有窗口的情况下测试 |
+| 1.5 呈现 | `MainWindow` | 只做绑定与事件转发（浏览文件夹、开始、取消、关闭拦截） |
+
+关键边界：
+
+- **三个维度分开表达，绝不折叠成一个 `Success` 布尔值**。`PreflightRunResult` 同时给出运行状态
+  （Completed / Cancelled / Failed）、每个阶段实际覆盖到了什么、以及 findings；构造函数据此拒绝
+  "已完成但没有 inventory""未完成却带 findings""失败却没有原因"等自相矛盾的组合。
+  `CheckViewModel` 同样分开呈现，但**没有任何属性**把三者合成一句话。
+- **未经执行的阶段不会被当成"干净"**：漏做 M6（两参数重载）仍然只产出
+  `…CHECK_NOT_PERFORMED`（Info），覆盖率显示为 `NotPerformed`。
+- **"已开始但未返回" ≠ "从未执行"**：一次中断的源观测覆盖率记为 `Incomplete`（不是 `NotPerformed`），
+  因为它确实走过了一部分树，并且旁边的"observed so far"计数与它一致。
+- **未完成的运行不产出 findings**：取消或失败的运行保留已确立的事实和未到达的阶段，但不做评估——
+  否则"部分评估"和"完整评估"在界面上无法区分。
+- **只有真正完成的运行才可达冻结语句**：`"No known blocking issue was detected."` 仅在运行状态为
+  Completed 且 Error 计数为 0 时出现。覆盖缺口会与它**并列**显示，而不是被它取代。
+- **取消是诚实的**：每次运行一个 `CancellationTokenSource`；只有属于本次运行的
+  `OperationCanceledException` 才算用户取消，其他 token 的取消按失败处理；取消后绝不进入下一阶段、
+  绝不重新观测来"补齐"。
+- **关窗不放弃正在运行的工作**：忙碌时拒绝关闭并请求取消，窗口保持响应，直到运行真正结束。
+- **仍然只读**：编排与界面都**不**向源或目标写入任何 probe / 临时文件，不复制、不移动、不删除、不重命名、
+  不改权限、不读内容。窗口上明确写着这一点。
+- **没有**为此新增运行时项目、DI 容器、事件总线、插件系统或工作流引擎；呈现层没有为每个方法定义接口。
+  唯一被改动的既有实现是 M2 `SourceScanner` 的**进度报告频率**（见 §4.8），其扫描语义、统计与 reparse 行为未变。
+
+### 4.8 仍未确定
 
 为避免过度设计，以下内容仍然**不予确定**，留待有真实需求驱动的里程碑：
 
@@ -261,7 +324,8 @@ Finding
 - 尚未实现的规则：overwrite / skip 策略、目标内容比较、按已存在目标文件扣减空间、
   目标大小写敏感性 probe、二阶大小写碰撞、完整目标索引器 / 递归扫描目标、8.3 短名碰撞、
   ADS 检测、reparse point 精确分类、元数据（ACL / 时间戳）丢失规则、Unicode normalization 深度兼容
-- findings 的展示形式与序列化方式
-- 扫描器、目标探测与规则评估在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
+- findings 的展示形式与序列化方式（导出、保存、报告生成）
+- 多源目录 / 批量检查、检查历史与对比
+- 结果行的排序、过滤与分组策略（M7 只按 Severity 稳定排序展示）
 
 这些应在有真实需求驱动时再确定，避免在缺乏事实的情况下把接口设计死。

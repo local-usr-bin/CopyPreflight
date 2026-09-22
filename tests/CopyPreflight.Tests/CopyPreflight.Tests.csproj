@@ -26,6 +26,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CopyPreflight.Core\CopyPreflight.Core.csproj" />
     <ProjectReference Include="..\..\src\CopyPreflight.Windows\CopyPreflight.Windows.csproj" />
+    <!--
+      The presentation layer is referenced so that its state machine can be tested without a window.
+      The types these tests reach carry no WPF type in their signatures, so no window, dispatcher or
+      message loop is involved in running them.
+    -->
+    <ProjectReference Include="..\..\src\CopyPreflight.App\CopyPreflight.App.csproj" />
   </ItemGroup>
 
 </Project>

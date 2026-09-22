@@ -34,6 +34,24 @@ namespace CopyPreflight.Core;
 /// </remarks>
 public sealed class SourceScanner
 {
+    /// <summary>
+    /// How many entries may be observed inside one directory before an interim snapshot is reported.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Snapshots are reported when a directory has been listed completely, which is the granularity a
+    /// report is built on. A single directory holding a very large number of objects would otherwise
+    /// leave the caller with no news at all until that directory ended, so an interim snapshot is also
+    /// reported along the way.
+    /// </para>
+    /// <para>
+    /// This is a reporting interval, not a promise about timing or about how many snapshots a scan
+    /// produces: the counters are exact at every snapshot, the per-directory snapshot is always
+    /// reported, and the last snapshot of a scan still equals the counters of its result.
+    /// </para>
+    /// </remarks>
+    private const int ProgressEntryInterval = 512;
+
     private readonly ISourceDirectoryReader _directoryReader;
 
     /// <summary>Creates a scanner that reads the real file system.</summary>
@@ -58,8 +76,9 @@ public sealed class SourceScanner
     /// </param>
     /// <param name="progress">
     /// Optional receiver of progress snapshots. It is called once per directory whose children were
-    /// observed, on the calling thread. A snapshot may be reported synchronously; implementations
-    /// are expected to return promptly.
+    /// observed, and additionally while a single directory is still being listed if that directory
+    /// holds a large number of entries, on the calling thread. A snapshot may be reported
+    /// synchronously; implementations are expected to return promptly.
     /// </param>
     /// <param name="cancellationToken">
     /// Cancels the scan. Cancellation is observed before the walk starts, once per directory and
@@ -157,24 +176,60 @@ public sealed class SourceScanner
                         {
                             directoriesObserved++;
                         }
+
+                        // An interim snapshot, so that one directory holding a very large number of
+                        // objects still reports progress while it is being listed. Every value is the
+                        // exact count at this moment, and this changes nothing about what is observed.
+                        if (entriesObserved % ProgressEntryInterval == 0)
+                        {
+                            ReportProgress(
+                                progress,
+                                entriesObserved,
+                                filesObserved,
+                                directoriesObserved,
+                                reparsePointsObserved,
+                                logicalBytesObserved,
+                                issues.Count,
+                                current.RelativePath);
+                        }
                     }
                 }
             }
 
             // Counters are complete for this directory, so the last snapshot of a scan always
             // equals the counters of the returned result.
-            progress?.Report(new SourceScanProgress(
+            ReportProgress(
+                progress,
                 entriesObserved,
                 filesObserved,
                 directoriesObserved,
                 reparsePointsObserved,
                 logicalBytesObserved,
                 issues.Count,
-                current.RelativePath));
+                current.RelativePath);
         }
 
         return new SourceScanResult(fullSourceRoot, entries, issues);
     }
+
+    /// <summary>Publishes one snapshot of the counters, if anyone is listening.</summary>
+    private static void ReportProgress(
+        IProgress<SourceScanProgress>? progress,
+        long entriesObserved,
+        long filesObserved,
+        long directoriesObserved,
+        long reparsePointsObserved,
+        long logicalBytesObserved,
+        int issuesObserved,
+        string? currentRelativePath)
+        => progress?.Report(new SourceScanProgress(
+            entriesObserved,
+            filesObserved,
+            directoriesObserved,
+            reparsePointsObserved,
+            logicalBytesObserved,
+            issuesObserved,
+            currentRelativePath));
 
     /// <summary>Starts listing one directory, recording an issue if the listing cannot be started.</summary>
     private IEnumerator<ObservedDirectoryChild>? TryBeginEnumeration(

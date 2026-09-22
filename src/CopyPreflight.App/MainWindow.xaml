@@ -5,14 +5,253 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:CopyPreflight.App"
         mc:Ignorable="d"
-        Title="CopyPreflight" Height="450" Width="800">
-    <!-- M0 placeholder shell only. The real UI is designed in a later milestone. -->
-    <Grid>
-        <TextBlock HorizontalAlignment="Center"
-                   VerticalAlignment="Center"
-                   FontSize="14"
-                   TextWrapping="Wrap"
-                   TextAlignment="Center"
-                   Text="CopyPreflight&#x2014;engineering baseline (M0).&#x0a;No scanning functionality yet." />
+        Title="CopyPreflight — migration preflight check"
+        Height="860"
+        Width="1180"
+        MinHeight="600"
+        MinWidth="940">
+    <!--
+        M7 check screen. It uses only standard WPF controls and lightweight styles: no theme system, no
+        MVVM framework, no custom control library. The layout gives the findings list the growing row so
+        that a long list is never squeezed out, and keeps the summary in its own bounded scroller so it
+        cannot push the buttons or the results off the window.
+    -->
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+
+        <Style x:Key="SummaryLine" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,1,0,1" />
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,6,0,2" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" MinHeight="160" />
+        </Grid.RowDefinitions>
+
+        <!-- What to check -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Source folder" VerticalAlignment="Center" Margin="0,0,8,4" />
+            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,8,4"
+                     IsEnabled="{Binding IsInputEnabled}"
+                     Text="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Grid.Row="0" Grid.Column="2" Content="Browse…" Width="90" Margin="0,0,0,4"
+                    IsEnabled="{Binding IsInputEnabled}"
+                    Click="BrowseSource_Click" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Target folder" VerticalAlignment="Center" Margin="0,0,8,4" />
+            <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,8,4"
+                     IsEnabled="{Binding IsInputEnabled}"
+                     Text="{Binding TargetPath, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Grid.Row="1" Grid.Column="2" Content="Browse…" Width="90" Margin="0,0,0,4"
+                    IsEnabled="{Binding IsInputEnabled}"
+                    Click="BrowseTarget_Click" />
+
+            <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,4"
+                       TextWrapping="Wrap"
+                       Foreground="#555555"
+                       Text="The contents of the source folder map straight onto the target folder: source\&lt;relative path&gt; becomes target\&lt;relative path&gt;. The target folder is the destination root itself — no folder named after the source is added. Both paths must be complete paths; a relative path is not resolved against the folder the application was started from." />
+
+            <TextBlock Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding HasInputMessage, Converter={StaticResource BoolToVisibility}}"
+                       Foreground="#B00020"
+                       Text="{Binding InputMessage}" />
+        </Grid>
+
+        <!-- What can be done -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="Start check" Width="120" Height="28"
+                    IsEnabled="{Binding CanStartCheck}"
+                    Click="StartCheck_Click" />
+            <Button Content="Cancel" Width="100" Height="28" Margin="8,0,0,0"
+                    IsEnabled="{Binding CanCancelCheck}"
+                    Click="CancelCheck_Click" />
+            <ProgressBar Width="220" Height="10" Margin="16,0,0,0"
+                         VerticalAlignment="Center"
+                         IsIndeterminate="True"
+                         Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
+            <TextBlock Text="Read-only: this check never copies, moves, deletes, renames or writes anything."
+                       Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#555555" />
+        </StackPanel>
+
+        <!-- Where the check is -->
+        <StackPanel Grid.Row="2" Margin="0,10,0,0">
+            <TextBlock Text="{Binding StateText}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding PhaseText}" Margin="0,2,0,0" TextWrapping="Wrap" Foreground="#555555" />
+            <TextBlock Text="{Binding FailureText}" Margin="0,2,0,0" TextWrapping="Wrap" Foreground="#B00020"
+                       Visibility="{Binding HasFailure, Converter={StaticResource BoolToVisibility}}" />
+            <TextBlock Text="{Binding ConclusionText}" Margin="0,4,0,0" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding BlockingStatementText}" Margin="0,2,0,0" TextWrapping="Wrap" FontWeight="SemiBold"
+                       Visibility="{Binding HasBlockingStatement, Converter={StaticResource BoolToVisibility}}" />
+        </StackPanel>
+
+        <!-- What this check covered, and what it found out about the target -->
+        <GroupBox Grid.Row="3" Header="This check" Margin="0,10,0,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="260">
+                <Grid Margin="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Folders" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding SourcePathText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding TargetPathText}" />
+
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Observed in the source" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding FilesText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding DirectoriesText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding ReparsePointsText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding LogicalBytesText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding ScanIssuesText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding CountsNote}"
+                                   Foreground="#B00020" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="What Windows reports about the target" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding FileSystemText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding FreeSpaceText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding ComponentLimitText}" />
+
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="What this check covered" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding SourceCoverageText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding TargetCoverageText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding ExistingObjectCoverageText}" />
+                        <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding RulesCoverageText}" />
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </GroupBox>
+
+        <!-- What was found -->
+        <Grid Grid.Row="4" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="380" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="420" MinWidth="260" />
+            </Grid.ColumnDefinitions>
+
+            <DataGrid Grid.Column="0"
+                      ItemsSource="{Binding Findings}"
+                      SelectedItem="{Binding SelectedFinding, Mode=TwoWay}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      CanUserAddRows="False"
+                      CanUserDeleteRows="False"
+                      CanUserResizeRows="False"
+                      HeadersVisibility="Column"
+                      GridLinesVisibility="Horizontal"
+                      SelectionMode="Single"
+                      SelectionUnit="FullRow"
+                      RowHeaderWidth="0"
+                      EnableRowVirtualization="True"
+                      EnableColumnVirtualization="True"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      Visibility="{Binding HasFindings, Converter={StaticResource BoolToVisibility}}">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Severity" Binding="{Binding SeverityLabel}" Width="80">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SeverityLabel}" Value="Error">
+                                        <Setter Property="Foreground" Value="#B00020" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SeverityLabel}" Value="Warning">
+                                        <Setter Property="Foreground" Value="#9A6700" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SeverityLabel}" Value="Info">
+                                        <Setter Property="Foreground" Value="#1565C0" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="300" />
+                    <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" />
+                    <DataGridTextColumn Header="Path" Binding="{Binding SourcePathText}" Width="280" />
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <TextBlock Grid.Column="0" Margin="4" TextWrapping="Wrap" VerticalAlignment="Top"
+                       Foreground="#555555"
+                       Visibility="{Binding IsFindingsEmpty, Converter={StaticResource BoolToVisibility}}"
+                       Text="{Binding FindingsEmptyText}" />
+
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                          Background="#DDDDDD"
+                          Visibility="{Binding HasFindings, Converter={StaticResource BoolToVisibility}}" />
+
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
+                <StackPanel Margin="10,0,0,0" DataContext="{Binding SelectedFinding}">
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{Binding SeverityLabel}" />
+                    <TextBlock Style="{StaticResource SummaryLine}" FontWeight="SemiBold" Text="{Binding Title}" />
+                    <TextBlock Style="{StaticResource SummaryLine}" Text="{Binding Code}" Foreground="#555555" />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Path" />
+                    <!--
+                        A read-only TextBox rather than a TextBlock: a long relative path has to be
+                        viewable in full and selectable for copying, which a TextBlock cannot do.
+                    -->
+                    <TextBox Text="{Binding SourcePathText, Mode=OneWay}"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Padding="0" />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Explanation" />
+                    <TextBox Text="{Binding Explanation, Mode=OneWay}"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Padding="0" />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Impact" />
+                    <TextBox Text="{Binding Impact, Mode=OneWay}"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Padding="0" />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Recommendation" />
+                    <TextBox Text="{Binding Recommendation, Mode=OneWay}"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Padding="0" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
     </Grid>
 </Window>

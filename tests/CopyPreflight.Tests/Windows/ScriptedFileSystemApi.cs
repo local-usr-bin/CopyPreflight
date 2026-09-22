@@ -73,6 +73,8 @@ internal sealed class ScriptedFileSystemApi : IWindowsFileSystemApi
 
     private bool _rejectUnscriptedAttributePaths;
 
+    private CancellationTrigger? _cancellationAfter;
+
     private readonly List<string> _attributePaths = [];
     private readonly List<string> _freeSpacePaths = [];
     private readonly List<string> _volumePathPaths = [];
@@ -185,10 +187,36 @@ internal sealed class ScriptedFileSystemApi : IWindowsFileSystemApi
         return this;
     }
 
+    /// <summary>
+    /// Requests cancellation of the given source once this many attribute queries have been made.
+    /// </summary>
+    /// <param name="attributeQueries">How many queries to answer before the request is made.</param>
+    /// <param name="cancellation">The source to signal.</param>
+    /// <remarks>
+    /// This simulates a user asking for a check to stop while a check is in progress: the request
+    /// arrives from outside the check, and the check notices it at its own next cancellation check.
+    /// Nothing about the check itself is replaced — it is the production code that observes the
+    /// request, which is exactly what a test of cancellation has to exercise.
+    /// </remarks>
+    internal ScriptedFileSystemApi WithCancellationAfter(
+        int attributeQueries,
+        CancellationTokenSource cancellation)
+    {
+        _cancellationAfter = new CancellationTrigger(attributeQueries, cancellation, false);
+        return this;
+    }
+
     /// <inheritdoc />
     public bool TryGetFileAttributes(string path, out FileAttributes attributes, out int nativeError)
     {
         _attributePaths.Add(path);
+
+        if (_cancellationAfter is { Requested: false } trigger
+            && _attributePaths.Count >= trigger.AttributeQueries)
+        {
+            _cancellationAfter = trigger with { Requested = true };
+            trigger.Source.Cancel();
+        }
 
         if (_attributeAnswers.TryGetValue(path, out var scripted))
         {
@@ -252,4 +280,10 @@ internal sealed class ScriptedFileSystemApi : IWindowsFileSystemApi
         FileAttributes Attributes,
         int NativeError,
         bool Failed);
+
+    /// <summary>A pending request to cancel a check, made once a number of queries have been answered.</summary>
+    private readonly record struct CancellationTrigger(
+        int AttributeQueries,
+        CancellationTokenSource Source,
+        bool Requested);
 }

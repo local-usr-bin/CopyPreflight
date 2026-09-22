@@ -16,9 +16,11 @@ namespace CopyPreflight.Core;
 /// <see cref="SourceScanResult"/>.
 /// </para>
 /// <para>
-/// Progress is reported at directory granularity — once per successfully walked directory — so the
-/// number of callbacks is bounded by the number of directories rather than the number of entries.
-/// A snapshot is therefore a coarse "where am I" signal, not a per-entry event stream.
+/// Progress is reported at directory granularity — once per successfully walked directory — and
+/// additionally at an entry interval inside a directory that holds a large number of objects, so that
+/// one very large directory cannot leave the caller without news until it ends. The number of
+/// callbacks therefore stays far below the number of entries. A snapshot is a coarse "where am I"
+/// signal, not a per-entry event stream.
 /// </para>
 /// </remarks>
 public sealed record SourceScanProgress
