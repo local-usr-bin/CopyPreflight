@@ -17,15 +17,20 @@
 
 | 项目 | 类型 | 职责 | 依赖 |
 | --- | --- | --- | --- |
-| `src/CopyPreflight.Core` | 类库 (`net10.0`) | 扫描、目标能力、规则、findings（见 `docs/ARCHITECTURE.md`） | 无 |
+| `src/CopyPreflight.Core` | 类库 (`net10.0`) | 扫描、目标能力模型、规则、findings（见 `docs/ARCHITECTURE.md`） | 无 |
+| `src/CopyPreflight.Windows` | 类库 (`net10.0-windows`) | 目标能力探测的 Windows 实现：Win32 interop、Windows 卷 / 目标发现 | → Core |
 | `src/CopyPreflight.App` | WPF (`net10.0-windows`) | 表现层与用户交互 | → Core |
-| `tests/CopyPreflight.Tests` | xUnit (`net10.0`) | 测试 | → Core |
+| `tests/CopyPreflight.Tests` | xUnit (`net10.0-windows`) | 测试 | → Core, Windows |
 
 **硬约束：**
 
-- `CopyPreflight.Core` **不得**依赖 WPF，**不得**引用 `CopyPreflight.App`。
+- `CopyPreflight.Core` **不得**依赖 WPF，**不得**引用 `CopyPreflight.App` 或 `CopyPreflight.Windows`。
 - 依赖方向单向指向 Core。不要把 UI 相关类型泄漏进 Core。
-- 不要为了形式上的分层而新增程序集。当前三个项目是刻意的下限，不是需要被拆分的上限。
+- Win32 / P/Invoke **只允许**出现在 `CopyPreflight.Windows`；Core 保持 `net10.0` 且不含平台调用。
+- Windows 专属的公开实现必须显式表达其平台契约（Windows-specific TFM，必要时加
+  `SupportedOSPlatform`）。不要用关闭 analyzer / `NoWarn` / `#pragma` 掩盖平台边界。
+- 不要为了形式上的分层而新增程序集。当前四个项目是刻意的下限，不是需要被拆分的上限；
+  不要新增第二个 Windows 运行时程序集。
 
 ## 3. 构建与测试
 
@@ -63,7 +68,9 @@ Web 框架、AI API、原生依赖包、打包框架。
 
 - 测试框架属于正常工程依赖，可使用标准成熟模板。
 - **不为测试引入 mock 文件系统依赖**（例如 `System.IO.Abstractions`），也不因此建立 virtual file system。
-  需要可控的 I/O 边界时，在 Core 内用一个极小的 `internal` 抽象加 `InternalsVisibleTo` 即可。
+  需要可控的 I/O 边界时，在需要它的那个程序集内用一个极小的 `internal` 抽象加 `InternalsVisibleTo` 即可
+  （Core 的 `ISourceDirectoryReader`、Windows 的 `IWindowsFileSystemApi` 都是这个模式）。
+  这类 seam 只覆盖实际调用的操作，不得扩展成通用 OS 抽象或 plugin 接口。
 - 需要新增任何依赖前，先说明必要性并取得确认；不要静默添加。
 
 ## 6. 产品边界（写代码时最容易违反的部分）
@@ -76,7 +83,9 @@ Web 框架、AI API、原生依赖包、打包框架。
 
 无法确定的目标能力必须表达为 **Unknown**，不得猜测。
 "扫描通过"只意味着 "No known blocking issue was detected."，不得表述为任何形式的保证。
-完整定义见 [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)。
+**"目标可写"永远不能被声称** —— 可写性没有、也不会通过写操作验证。
+完整定义见 [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)，
+目标探测这一层的具体边界见 [`docs/TARGET_PROBING.md`](docs/TARGET_PROBING.md)。
 
 ## 7. 面对不确定的 Windows 行为
 

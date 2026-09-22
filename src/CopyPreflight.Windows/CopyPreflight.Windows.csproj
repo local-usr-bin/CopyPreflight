@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Windows-only by construction: this assembly carries the Win32 interop and the Windows volume
+      discovery that the target probe needs. CopyPreflight.Core stays net10.0 and free of P/Invoke,
+      and never references this project.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CopyPreflight.Core\CopyPreflight.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The Win32 seam is internal on purpose: it is not product API. Tests need it to produce the
+      outcomes this machine cannot be made to produce without admin rights or a real network share —
+      a volume-information query that fails while the free-space query succeeds, and native values
+      that no ordinary volume reports.
+    -->
+    <InternalsVisibleTo Include="CopyPreflight.Tests" />
+  </ItemGroup>
+
+</Project>

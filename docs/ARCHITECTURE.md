@@ -70,14 +70,18 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 当前工程基线为：
 
-- `CopyPreflight.Core` —— 承载 1.1–1.4 的职责，**不依赖 WPF**，**不依赖** `CopyPreflight.App`。
+- `CopyPreflight.Core` —— 承载 1.1–1.4 的职责，**不依赖 WPF**，**不依赖** `CopyPreflight.App` 或
+  `CopyPreflight.Windows`；保持 `net10.0`，不含 Win32 P/Invoke。
+- `CopyPreflight.Windows` —— 承载 1.2 的 Windows 具体实现（Win32 interop、Windows 卷 / 目标发现），
+  引用 `CopyPreflight.Core`。平台限定为 `net10.0-windows`。
 - `CopyPreflight.App` —— 承载 1.5，引用 `CopyPreflight.Core`。
-- `CopyPreflight.Tests` —— 引用 `CopyPreflight.Core`。
+- `CopyPreflight.Tests` —— 引用 `CopyPreflight.Core` 与 `CopyPreflight.Windows`。
 
-依赖方向单向指向 Core。Core 保持与 UI 技术无关，从而使扫描与规则逻辑可以在没有 UI 的情况下被测试。
+依赖方向单向指向 Core。Core 保持与 UI 技术和平台无关，从而使扫描与领域模型可以在没有 UI、
+也不需要 Win32 的情况下被思考与测试。
 
 > M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1），
-> M2 确定了源扫描器的公开契约与结果模型（见 §4.2）。
+> M2 确定了源扫描器的公开契约与结果模型（见 §4.2），M3 确定了目标能力探测的 Windows 实现与契约（见 §4.3）。
 
 ## 4. 本阶段已确定 / 未确定的事
 
@@ -119,14 +123,38 @@ M2 实现了 §1.1 的第一版真实扫描器。它仍然是纯观察层：只�
 完整的扫描器契约（路径语义、统计恒等式、错误策略、reparse 边界、进度与取消）见
 [`SCANNER.md`](SCANNER.md)。
 
-### 4.3 仍未确定
+### 4.3 M3 已确定：Windows 目标能力探测
+
+M3 实现了 §1.2 的第一版真实目标能力探测。它仍然只观察、不判断，且仍然严格只读。
+
+| 职责 | 类型 | 语义 |
+| --- | --- | --- |
+| 1.2 target capability discovery | `WindowsTargetCapabilityProbe` | 对给定目标目录探测 M1 冻结的三项能力：文件系统名称、当前调用用户的可用空间、单路径组件长度上限 |
+| 1.2 target capability discovery | `TargetProbeResult` | 探测结果：规范化后的目标路径、三项能力、以及探测失败记录 |
+| 1.2 target capability discovery | `TargetProbeIssue`、`TargetProbeIssueKind` | **探测失败的事实**，与 `Finding` 分开：无 Severity、无建议 |
+
+关键边界：
+
+- 三项能力**各自独立**：一项查询失败不会丢掉另一项已经取得的 capability。
+  `AvailableFreeBytes = Known` 而 `FileSystemName = Unknown` 是 SMB / NAS 目标上的合法结果。
+- 卷由 Windows 自己的 mount point 解析（`GetVolumePathNameW`）确定，**不是** `Path.GetPathRoot`，
+  以免把 mounted folder / junction 或 UNC 目标误判成盘符 root。
+- 可用空间只取 `lpFreeBytesAvailableToCaller`（当前用户配额下真正可用的量），不使用物理总剩余空间。
+- 目标不可用（不存在 / 无法访问 / 不可达 / 名称非法）**不抛异常**，而是记录 issue 并让三项能力保持 Unknown；
+  名称非法与"语法合法但达不到"分开报告。
+- **不做目标可写性测试**：不创建 probe 文件、不创建目录、不改 ACL，因此结果不声称目标可写。
+- Windows 具体实现与新引入的 Win32 interop 都在 `CopyPreflight.Windows`；Core 保持 `net10.0` 无 P/Invoke。
+
+完整的目标探测契约（输入路径语义、四个 Win32 API 及其语义选择、部分成功、只读边界、issue 模型）见
+[`TARGET_PROBING.md`](TARGET_PROBING.md)。
+
+### 4.4 仍未确定
 
 为避免过度设计，以下内容仍然**不予确定**，留待有真实需求驱动的里程碑：
 
 - 规则的执行接口与注册方式（RuleEngine / registry / discovery / plugin）
 - 具体规则的实现（FAT32 单文件上限、空间、路径长度、文件名合法性、冲突等）
-- 目标能力探测（target probing）的具体实现方式
 - findings 的展示形式与序列化方式
-- 扫描器在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
+- 扫描器与目标探测在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
 
 这些应在有真实需求驱动时再确定，避免在缺乏事实的情况下把接口设计死。

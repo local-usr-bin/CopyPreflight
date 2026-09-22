@@ -4,9 +4,14 @@ using System.IO;
 namespace CopyPreflight.Tests;
 
 /// <summary>
-/// A throwaway source tree under the process temp directory, for scanner tests.
+/// A throwaway directory tree under the process temp directory, for tests that need real directories
+/// and files on disk.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Introduced for the scanner tests and reused by the target-probe tests, which need the same kind of
+/// fixture: real paths the operating system actually answers questions about.
+/// </para>
 /// <para>
 /// Disposal deletes the tree. Reparse points are unlinked as themselves, and before the directories
 /// that contain them: deleting a directory tree that still contains a junction fails on Windows, and

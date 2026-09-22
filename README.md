@@ -10,14 +10,18 @@ CopyPreflight **不是复制软件**。它不执行复制、不执行移动、�
 
 | 项目 | 状态 |
 | --- | --- |
-| 当前里程碑 | **M2 — Source scanner baseline：已完成** |
-| 产品功能 | 只读的源目录扫描已可用：递归 inventory、文件 / 目录 / 逻辑字节统计、扫描 issue、进度、取消、reparse point 安全边界。尚未实现目标能力探测与规则判定，因此还不会产生 findings |
-| 用户界面 | 仅有一个可启动的占位窗口；扫描器尚未接入 UI，最终 UI 也尚未设计 |
+| 当前里程碑 | **M3 — Target capability discovery baseline：已完成** |
+| 产品功能 | 只读的源目录扫描已可用（递归 inventory、文件 / 目录 / 逻辑字节统计、扫描 issue、进度、取消、reparse point 安全边界）；目标能力探测的第一版已可用，能报告目标文件系统名称、当前用户可用空间与单路径组件长度上限，无法确定的保持 Unknown。尚未实现规则判定，因此还不会产生 findings |
+| 用户界面 | 仅有一个可启动的占位窗口；扫描器与目标探测均未接入 UI，最终 UI 也尚未设计 |
 
-M2 加入的真实扫描逻辑**只存在于 Core**，且严格只读：它不打开任何文件、不读取文件内容、
-不向源目录或目标目录写入任何内容，也不做任何探测。规则判定、目标能力探测与 Win32 调用**尚未实现**。
+M2 加入的真实扫描逻辑**只存在于 Core**。M3 加入的目标能力探测与 Win32 interop **只存在于
+`CopyPreflight.Windows`**（`net10.0-windows`），Core 保持 `net10.0` 且不含 P/Invoke。
+两者都严格只读：不打开文件、不读取文件内容、不向源目录或目标目录写入任何内容，
+目标探测也**不做可写性测试**（不创建 probe 文件、不创建目录、不改 ACL）。
+规则判定**尚未实现**。
 
 - 扫描器契约（路径语义、统计、错误策略、reparse 边界、进度与取消）：[`docs/SCANNER.md`](docs/SCANNER.md)
+- 目标能力探测契约（输入路径语义、Win32 API 与语义选择、部分成功、只读边界）：[`docs/TARGET_PROBING.md`](docs/TARGET_PROBING.md)
 - v0.1 的完整范围：[`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)
 
 ## 技术栈
@@ -42,16 +46,18 @@ CopyPreflight/
 ├─ docs/
 │   ├─ PRODUCT_SPEC.md      # 产品定位、原则与范围
 │   ├─ ARCHITECTURE.md      # 高层职责边界
-│   └─ SCANNER.md           # 源扫描器契约（M2）
+│   ├─ SCANNER.md           # 源扫描器契约（M2）
+│   └─ TARGET_PROBING.md    # 目标能力探测契约（M3）
 ├─ src/
-│   ├─ CopyPreflight.Core/  # 类库，不依赖 WPF，不依赖 App
+│   ├─ CopyPreflight.Core/  # 类库，不依赖 WPF，不依赖 App，不含 P/Invoke
 │   │   ├─ Domain/          # 源对象事实模型
 │   │   ├─ Capabilities/    # 已知 / 未知的目标能力
 │   │   ├─ Findings/        # 规则层的结论单元（M2 尚未产生）
 │   │   └─ Scanning/        # 源扫描器（M2）
+│   ├─ CopyPreflight.Windows/ # Windows 目标能力探测与 Win32 interop（M3），引用 Core
 │   └─ CopyPreflight.App/   # WPF 应用，引用 Core
 └─ tests/
-    └─ CopyPreflight.Tests/ # 测试项目，引用 Core
+    └─ CopyPreflight.Tests/ # 测试项目，引用 Core 与 Windows
 ```
 
 ## 构建与测试
@@ -83,4 +89,6 @@ dotnet run --project src/CopyPreflight.App
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 扫描、目标能力、规则、findings 与 UI 的职责边界。
 - [`docs/SCANNER.md`](docs/SCANNER.md) — 源扫描器契约：source root 与 relative path 语义、统计恒等式、
   scan issue 与错误策略、reparse point 边界、进度与取消。
+- [`docs/TARGET_PROBING.md`](docs/TARGET_PROBING.md) — 目标能力探测契约：输入路径语义、三个 capability 的
+  Known/Unknown 原则、部分成功语义、使用的 Win32 API 及语义选择、只读边界与 issue 模型。
 - [`AGENTS.md`](AGENTS.md) — 后续开发需要遵守的仓库级工程规范。

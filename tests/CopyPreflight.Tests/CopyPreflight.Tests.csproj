@@ -1,7 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!--
+      Windows-targeted because the tests reference CopyPreflight.Windows, whose Win32 interop is only
+      available on Windows. No second test project was added: CopyPreflight targets Windows 10 x64, so
+      one test project that can reach every product assembly is enough.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -20,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CopyPreflight.Core\CopyPreflight.Core.csproj" />
+    <ProjectReference Include="..\..\src\CopyPreflight.Windows\CopyPreflight.Windows.csproj" />
   </ItemGroup>
 
 </Project>
