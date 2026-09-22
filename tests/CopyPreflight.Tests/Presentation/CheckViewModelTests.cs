@@ -166,6 +166,91 @@ public class CheckViewModelTests
         Assert.Equal("Assessment finished.", viewModel.StateText);
     }
 
+    /// <summary>
+    /// Cancels in the window between the run finishing and its result reaching the screen.
+    /// </summary>
+    /// <remarks>
+    /// This is the timing the other cancellation tests do not reach: the check is over — every stage
+    /// ran and its findings were derived — but the screen has not been told yet. The cancellation is
+    /// real (the run's own token is cancelled and the screen says so), and the result that follows is
+    /// the one that finished. Publishing "cancelled" here would state that a check which ran every
+    /// stage had not run, and would drop its findings from the screen.
+    /// </remarks>
+    [Fact]
+    public async Task CancelCheck_AfterTheRunFinishedButBeforeItsResultIsShown_StillShowsTheRunThatFinished()
+    {
+        using var source = new TemporarySourceTree();
+        using var target = new TemporarySourceTree();
+
+        source.CreateFile("notes.txt", lengthInBytes: 16);
+
+        // The production sink, so the delivery path under test is the real one: it captures the
+        // context that is current when the run starts, and that is this thread's.
+        var viewModel = new CheckViewModel(WorkflowInputs.Over());
+        viewModel.SourcePath = source.Root;
+        viewModel.TargetPath = target.Root;
+
+        var interfaceThread = new ManualSynchronizationContext();
+        var outer = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(interfaceThread);
+
+        Task run;
+
+        try
+        {
+            run = viewModel.StartCheckAsync();
+
+            // Step 1: the run has begun and the screen is busy.
+            Assert.Equal(CheckState.Running, viewModel.State);
+            Assert.True(viewModel.IsBusy);
+
+            // Nothing runs this queue on its own, so the screen cannot have been told anything yet:
+            // the counts still say they were never observed.
+            Assert.Contains("not observed", viewModel.FilesText);
+
+            // Step 2: the workflow has already returned its result. While it runs, coalescing keeps
+            // the queue at the single callback that carries its snapshots; the continuation is queued
+            // behind it only once the run's task completes. So two waiting callbacks means the result
+            // is in hand — and that no callback has run to get there.
+            Assert.True(
+                interfaceThread.WaitUntilPendingCountAtLeast(2, TimeSpan.FromMinutes(1)),
+                "The workflow should have returned its result already.");
+            Assert.Equal(2, interfaceThread.PendingCount);
+
+            // Step 3 and 4: the result is not shown yet, and the cancellation asked for here is real.
+            viewModel.CancelCheck();
+
+            Assert.Equal(CheckState.Cancelling, viewModel.State);
+            Assert.Contains("Cancellation requested", viewModel.StateText);
+            Assert.True(viewModel.IsBusy, "The screen stays busy until the run has genuinely ended.");
+            Assert.False(viewModel.CanStartCheck);
+
+            // Step 5: now the result reaches the screen.
+            interfaceThread.Drain();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(outer);
+        }
+
+        await run;
+
+        // Step 6: the check that finished is the check that is shown. Every stage ran — the phase
+        // line says so, and the counts are the real ones rather than a rewritten "not completed".
+        Assert.Equal(CheckState.Completed, viewModel.State);
+        Assert.Equal("Assessment finished.", viewModel.StateText);
+        Assert.Equal("All stages performed.", viewModel.PhaseText);
+        Assert.Contains("Regular files: 1", viewModel.FilesText);
+        Assert.True(viewModel.HasBlockingStatement);
+
+        // Step 3 of the other shape, kept: what has genuinely been published is not rewritten by a
+        // later cancellation.
+        viewModel.CancelCheck();
+
+        Assert.Equal(CheckState.Completed, viewModel.State);
+        Assert.Equal("All stages performed.", viewModel.PhaseText);
+    }
+
     [Fact]
     public async Task StartCheckAsync_AfterACancelledRun_CanRunAgainAndFinish()
     {

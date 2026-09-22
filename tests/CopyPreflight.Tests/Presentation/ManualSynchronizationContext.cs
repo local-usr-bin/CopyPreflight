@@ -22,6 +22,7 @@ internal sealed class ManualSynchronizationContext : SynchronizationContext
 {
     private readonly Queue<Action> _queue = new();
     private readonly object _gate = new();
+    private readonly ManualResetEventSlim _somethingArrived = new(false);
 
     /// <summary>How many callbacks are waiting to run.</summary>
     internal int PendingCount
@@ -43,6 +44,37 @@ internal sealed class ManualSynchronizationContext : SynchronizationContext
         lock (_gate)
         {
             _queue.Enqueue(() => callback(state));
+        }
+
+        // Recorded after the callback is queued, so a waiter that looks at the count first and then
+        // waits is woken rather than missed. The count is what the wait is actually about; this is
+        // only what stops it from having to poll.
+        _somethingArrived.Set();
+    }
+
+    /// <summary>Waits for the queue to be at least this deep, without running anything.</summary>
+    /// <param name="count">The number of waiting callbacks to wait for.</param>
+    /// <param name="timeout">How long to wait before giving up.</param>
+    /// <returns><see langword="true"/> when that many callbacks are waiting.</returns>
+    /// <remarks>
+    /// The count is re-read before every wait, so a signal that arrives while the caller is between
+    /// those two steps cannot be lost.
+    /// </remarks>
+    internal bool WaitUntilPendingCountAtLeast(int count, TimeSpan timeout)
+    {
+        while (true)
+        {
+            if (PendingCount >= count)
+            {
+                return true;
+            }
+
+            if (!_somethingArrived.Wait(timeout))
+            {
+                return false;
+            }
+
+            _somethingArrived.Reset();
         }
     }
 

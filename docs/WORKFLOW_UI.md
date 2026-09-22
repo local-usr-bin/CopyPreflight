@@ -81,6 +81,11 @@
   运行真正结束之后到达的取消请求不会改写已经发布的终态；而界面处于 `Cancelling` 时收到的结果若确实是
   `Completed`（取消来得太晚，评估已经跑完），界面就发布 `Completed`——因为那次评估确实产出了，
   把它显示成"已取消"才是失实。
+  呈现层**没有**第二道取消判断：把取消变成 `Cancelled` 结论的**唯一**位置是编排层那个双条件 catch 过滤器，
+  结果本身就是"这一轮究竟建立了什么"的权威。若在这里再判一次取消，等于用界面状态去推翻已经得到的底层事实，
+  并且会把已经推导出来的 findings 从屏幕上抹掉（未完成的运行按模型**不允许**带 findings）。
+  这段精确时序（后台已返回、结果尚未发布时取消）由
+  `CheckViewModelTests.CancelCheck_AfterTheRunFinishedButBeforeItsResultIsShown_StillShowsTheRunThatFinished` 钉住。
 - **重复运行**：编排层无状态，可复用；一次失败或取消后可以立即再跑，
   新运行拿到新的 `RequestId` 和新的 token source，不受前一次影响。
 
