@@ -139,7 +139,12 @@ public class WindowsPreflightEvaluatorTests
             SourceEntry.File(new string('n', 300), 8L * 1024 * 1024 * 1024),
             SourceEntry.ReparsePoint(@"links\link", SourceEntryKind.File),
             SourceEntry.Directory("media"),
-            SourceEntry.File(@"media\clip.mp4", 2048));
+            SourceEntry.File(@"media\clip.mp4", 2048),
+            SourceEntry.File("bad<.txt", 1),
+            SourceEntry.File("NUL.txt", 1),
+            SourceEntry.File("trail ", 1),
+            SourceEntry.File("A.txt", 1),
+            SourceEntry.File("a.txt", 1));
     }
 
     private static TargetProbeResult RichTarget()

@@ -23,6 +23,10 @@ public class WindowsPreflightFindingCodesTests
         "TARGET_FILESYSTEM_UNKNOWN",
         "TARGET_COMPONENT_LIMIT_UNKNOWN",
         "TARGET_FREE_SPACE_UNKNOWN",
+        "TARGET_NAME_INVALID_CHARACTER",
+        "TARGET_NAME_RESERVED_DEVICE",
+        "TARGET_NAME_TRAILING_SPACE_OR_PERIOD",
+        "SOURCE_CASE_COLLISION_RISK",
     ];
 
     [Fact]
@@ -108,7 +112,14 @@ public class WindowsPreflightFindingCodesTests
                 PreflightInputs.Issue(SourceScanIssueKind.CannotReadEntryMetadata, "unknown.bin"),
             ],
             SourceEntry.File(overLongName, 8L * 1024 * 1024 * 1024),
-            SourceEntry.ReparsePoint("link", SourceEntryKind.File));
+            SourceEntry.ReparsePoint("link", SourceEntryKind.File),
+
+            // The source-only naming rules of the naming-compatibility milestone.
+            SourceEntry.File("bad<.txt", 1),
+            SourceEntry.File("NUL.txt", 1),
+            SourceEntry.File("trail ", 1),
+            SourceEntry.File("A.txt", 1),
+            SourceEntry.File("a.txt", 1));
 
         yield return PreflightInputs.Evaluate(
             source,

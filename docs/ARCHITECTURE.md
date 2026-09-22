@@ -82,7 +82,7 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 > M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1），
 > M2 确定了源扫描器的公开契约与结果模型（见 §4.2），M3 确定了目标能力探测的 Windows 实现与契约（见 §4.3），
-> M4 确定了规则评估的入口与已实现规则（见 §4.4）。
+> M4 确定了规则评估的入口与已实现规则（见 §4.4），M5 在其中加入了 Windows 命名兼容性规则（见 §4.5）。
 
 ## 4. 本阶段已确定 / 未确定的事
 
@@ -160,7 +160,7 @@ M4 实现了 §1.3 的第一版规则层，也是第一次真正产出 §1.4 的
 | 职责 | 类型 | 语义 |
 | --- | --- | --- |
 | 1.3 rule evaluation | `WindowsPreflightEvaluator` | 消费 `SourceScanResult` 与 `TargetProbeResult`，产出 `Finding` 列表；同步、无状态、纯计算 |
-| 1.3 rule evaluation | `WindowsPreflightFindingCodes` | 当前已实现规则的稳定 code 常量（12 个），供日志与测试匹配；**不是** registry |
+| 1.3 rule evaluation | `WindowsPreflightFindingCodes` | 当前已实现规则的稳定 code 常量（M4 的 12 个 + M5 的 4 个），供日志与测试匹配；**不是** registry |
 
 关键边界：
 
@@ -181,14 +181,41 @@ M4 实现了 §1.3 的第一版规则层，也是第一次真正产出 §1.4 的
 完整的规则清单、每条规则的触发条件与边界、短路语义以及文本与确定性要求见
 [`RULES.md`](RULES.md)。
 
-### 4.5 仍未确定
+### 4.5 M5 已确定：Windows 命名兼容性规则
+
+M5 在同一个 `WindowsPreflightEvaluator` 中加入了 Windows 命名兼容性规则。它仍然只判断、只报告：
+不重命名、不替换字符、不 Trim 名称，也不做任何新的文件系统 I/O。
+
+| 职责 | 类型 | 语义 |
+| --- | --- | --- |
+| 1.3 rule evaluation | `WindowsNameCompatibilityRule` | 对每个 entry 自己的 leaf name 检查非法字符（Error）、保留设备名（Error）、结尾空格 / 句点（Warning） |
+| 1.3 rule evaluation | `SourceCaseCollisionRule` | 同一 parent 目录内仅大小写不同的 sibling 名称 → 一条 Warning |
+| 1.3 rule evaluation | `SourceRelativePathComponents` | 把 relative path 切成 leaf name 与 parent directory；纯字符串切分，不是路径抽象层 |
+
+关键边界：
+
+- 只判断每个 entry **自己**要创建的那一个 leaf name。祖先的名称问题不会被重复报告到它的
+  descendant 上，也不会对整条 relative path 搜索 `\` 或 `:`（那是路径分隔符）。
+- **仍是纯计算**：不 probe 目标已有对象、不 probe 目标大小写敏感性、不打开任何目标 handle，
+  因此**没有**引入 `TargetCollisionProbe` / `TargetEntryProbe` 之类的东西。
+- 这四条规则都是 **source-only**：它们不消费任何 target capability、不拼接目标路径，
+  因此在目标被拒绝时**仍然产生**。判定一组规则属于哪一侧的依据是"是否消费目标事实"，
+  不是 code 前缀的拼写。
+- `\\?\`（extended-length namespace）只豁免 M4 的传统 `MAX_PATH` 判断，**不豁免**任何名称规则：
+  名称一律按用户级 Windows 命名语义判断。
+- 大小写碰撞只能是 **Warning**：典型 Windows 目标不区分大小写，但 NTFS 支持 per-directory
+  case sensitivity，且 M5 没有 probe 目标，因此不能声称"一定冲突"。
+- 仍然**没有**为此新增项目、DI、registry、反射发现或插件机制，也没有新增第三方依赖。
+
+### 4.6 仍未确定
 
 为避免过度设计，以下内容仍然**不予确定**，留待有真实需求驱动的里程碑：
 
-- 规则的插件化：M4 只需要八条固定规则，因此规则由 `WindowsPreflightEvaluator` 直接按名字调用；
+- 规则的插件化：规则层只需要固定的一组规则，因此规则由 `WindowsPreflightEvaluator` 直接按名字调用；
   registry / discovery / plugin / 规则脚本仍然不存在，也不打算在没有真实需求时建立
-- 尚未实现的规则：目标对象冲突与 file ↔ directory 类型冲突、Windows 文件名与保留名称、非法字符、
-  结尾句点 / 空格、reparse point 精确分类、元数据（ACL / ADS / 时间戳）丢失规则
+- 尚未实现的规则：目标对象冲突与 file ↔ directory 类型冲突、目标大小写敏感性 probe、
+  8.3 短名碰撞、ADS 检测、reparse point 精确分类、元数据（ACL / 时间戳）丢失规则、
+  Unicode normalization 深度兼容
 - findings 的展示形式与序列化方式
 - 扫描器、目标探测与规则评估在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
 

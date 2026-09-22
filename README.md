@@ -10,8 +10,8 @@ CopyPreflight **不是复制软件**。它不执行复制、不执行移动、�
 
 | 项目 | 状态 |
 | --- | --- |
-| 当前里程碑 | **M4 — Rule evaluation baseline：已完成** |
-| 产品功能 | 只读的源目录扫描已可用（递归 inventory、文件 / 目录 / 逻辑字节统计、扫描 issue、进度、取消、reparse point 安全边界）；目标能力探测已可用，能报告目标文件系统名称、当前用户可用空间与单路径组件长度上限，无法确定的保持 Unknown；**规则层已可用**：源扫描失败与目标不可用会被报告为 Error，可用空间不足与 reparse point 会给出 Warning，FAT32 单文件上限、目标名称组件长度、传统 MAX_PATH 兼容性也已实现，未知目标能力会被说明为 Info |
+| 当前里程碑 | **M5 — Windows naming compatibility rules：已完成** |
+| 产品功能 | 只读的源目录扫描已可用（递归 inventory、文件 / 目录 / 逻辑字节统计、扫描 issue、进度、取消、reparse point 安全边界）；目标能力探测已可用，能报告目标文件系统名称、当前用户可用空间与单路径组件长度上限，无法确定的保持 Unknown；**规则层已可用**：源扫描失败与目标不可用会被报告为 Error，可用空间不足与 reparse point 会给出 Warning，FAT32 单文件上限、目标名称组件长度、传统 MAX_PATH 兼容性也已实现，未知目标能力会被说明为 Info；**Windows 命名兼容性规则也已实现**：非法名称字符与保留设备名是 Error，结尾空格 / 句点与仅大小写不同的兄弟名称碰撞是 Warning |
 | 用户界面 | 仅有一个可启动的占位窗口；扫描器、目标探测与规则评估均未接入 UI，最终 UI 也尚未设计 |
 
 M2 加入的真实扫描逻辑**只存在于 Core**。M3 加入的目标能力探测与 Win32 interop、M4 加入的规则评估
@@ -19,10 +19,11 @@ M2 加入的真实扫描逻辑**只存在于 Core**。M3 加入的目标能力�
 三者都严格只读：不打开文件、不读取文件内容、不向源目录或目标目录写入任何内容，
 目标探测也**不做可写性测试**（不创建 probe 文件、不创建目录、不改 ACL）。
 规则评估是**纯计算**：不重新扫描、不重新探测、不检查目标路径是否已存在。
+M5 的名称规则同样如此：不会去 probe 目标已有对象，也不会 probe 目标的大小写敏感性。
 
 - 扫描器契约（路径语义、统计、错误策略、reparse 边界、进度与取消）：[`docs/SCANNER.md`](docs/SCANNER.md)
 - 目标能力探测契约（输入路径语义、Win32 API 与语义选择、部分成功、只读边界）：[`docs/TARGET_PROBING.md`](docs/TARGET_PROBING.md)
-- 规则评估契约（已实现规则、Findings、Severity 判定、为什么空间规则是 Warning）：[`docs/RULES.md`](docs/RULES.md)
+- 规则评估契约（已实现规则、Findings、Severity 判定、名称规则与为什么某些结论只能是 Warning）：[`docs/RULES.md`](docs/RULES.md)
 - v0.1 的完整范围：[`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)
 
 ## 技术栈
@@ -49,15 +50,15 @@ CopyPreflight/
 │   ├─ ARCHITECTURE.md      # 高层职责边界
 │   ├─ SCANNER.md           # 源扫描器契约（M2）
 │   ├─ TARGET_PROBING.md    # 目标能力探测契约（M3）
-│   └─ RULES.md             # 规则评估契约（M4）
+│   └─ RULES.md             # 规则评估契约（M4/M5）
 ├─ src/
 │   ├─ CopyPreflight.Core/  # 类库，不依赖 WPF，不依赖 App，不含 P/Invoke
 │   │   ├─ Domain/          # 源对象事实模型
 │   │   ├─ Capabilities/    # 已知 / 未知的目标能力
 │   │   ├─ Findings/        # 规则层的结论单元
 │   │   └─ Scanning/        # 源扫描器（M2）
-│   ├─ CopyPreflight.Windows/ # Windows 目标能力探测、Win32 interop 与规则评估（M3/M4），引用 Core
-│   │   └─ Evaluation/      # 规则评估入口与各条规则（M4）
+│   ├─ CopyPreflight.Windows/ # Windows 目标能力探测、Win32 interop 与规则评估（M3/M4/M5），引用 Core
+│   │   └─ Evaluation/      # 规则评估入口与各条规则（M4/M5）
 │   └─ CopyPreflight.App/   # WPF 应用，引用 Core
 └─ tests/
     └─ CopyPreflight.Tests/ # 测试项目，引用 Core 与 Windows
@@ -95,6 +96,7 @@ dotnet run --project src/CopyPreflight.App
 - [`docs/TARGET_PROBING.md`](docs/TARGET_PROBING.md) — 目标能力探测契约：输入路径语义、三个 capability 的
   Known/Unknown 原则、部分成功语义、使用的 Win32 API 及语义选择、只读边界与 issue 模型。
 - [`docs/RULES.md`](docs/RULES.md) — 规则评估契约：公开 API 与纯计算边界、FindingCode 清单、
-  每条规则的触发条件与边界（FAT32 单文件上限、名称组件长度、传统 MAX_PATH、reparse point、可用空间）、
-  Unknown 能力的 coverage Info、顺序与短路语义、为什么空间规则当前只是 Warning。
+  每条规则的触发条件与边界（FAT32 单文件上限、名称组件长度、传统 MAX_PATH、Windows 名称兼容性、
+  大小写碰撞、reparse point、可用空间）、Unknown 能力的 coverage Info、顺序与短路语义、
+  为什么可用空间与大小写碰撞当前只能是 Warning。
 - [`AGENTS.md`](AGENTS.md) — 后续开发需要遵守的仓库级工程规范。

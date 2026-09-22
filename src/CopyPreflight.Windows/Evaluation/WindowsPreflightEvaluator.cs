@@ -21,8 +21,9 @@ namespace CopyPreflight.Windows;
 /// </para>
 /// <para>
 /// The rules described here are Windows migration compatibility rules — <c>MAX_PATH</c> behaviour,
-/// a FAT32 file-size ceiling, path component limits, reparse point handling — so this type lives in
-/// the Windows layer next to <see cref="TargetProbeResult"/>, which it consumes.
+/// a FAT32 file-size ceiling, path component limits, Windows file and directory naming rules,
+/// reparse point handling — so this type lives in the Windows layer next to
+/// <see cref="TargetProbeResult"/>, which it consumes.
 /// </para>
 /// <para>
 /// The order of the returned sequence is <b>not</b> a product contract; it happens to be stable
@@ -48,8 +49,13 @@ public sealed class WindowsPreflightEvaluator
     /// </exception>
     /// <remarks>
     /// <para>
-    /// Source-only rules — the scan failures and the reparse point warning — always run, because
-    /// they describe facts about the source that remain true whatever the target turns out to be.
+    /// Source-only rules — the scan failures, the reparse point warning and the Windows naming rules
+    /// — always run, because they describe facts about the source that remain true whatever the
+    /// target turns out to be. The naming rules belong here rather than with the target-dependent
+    /// rules because they consume no target capability and compose no destination path: whether a
+    /// name contains an illegal character, stands for a reserved device or ends with a space is a
+    /// property of the observed name, judged against ordinary Windows naming semantics. Losing those
+    /// findings because the target happened to be unusable would hide known problems in the source.
     /// </para>
     /// <para>
     /// If the target is itself rejected as a destination (Windows refused the path, or no usable
@@ -75,6 +81,8 @@ public sealed class WindowsPreflightEvaluator
         // the target can be used.
         findings.AddRange(SourceScanIssueRule.Evaluate(source));
         findings.AddRange(ReparsePointRule.Evaluate(source));
+        findings.AddRange(WindowsNameCompatibilityRule.Evaluate(source));
+        findings.AddRange(SourceCaseCollisionRule.Evaluate(source));
 
         if (TargetPathBlockerRule.IsTargetBlocked(target))
         {

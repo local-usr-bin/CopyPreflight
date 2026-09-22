@@ -66,6 +66,18 @@ public static class WindowsPreflightFindingCodes
     /// <summary>The target's free space could not be determined, so no space comparison was made.</summary>
     public static readonly FindingCode TargetFreeSpaceUnknown = new("TARGET_FREE_SPACE_UNKNOWN");
 
+    /// <summary>A name this entry would create contains characters an ordinary Windows name cannot.</summary>
+    public static readonly FindingCode TargetNameInvalidCharacter = new("TARGET_NAME_INVALID_CHARACTER");
+
+    /// <summary>A name this entry would create is a reserved Windows device name.</summary>
+    public static readonly FindingCode TargetNameReservedDevice = new("TARGET_NAME_RESERVED_DEVICE");
+
+    /// <summary>A name this entry would create ends with a space or a period.</summary>
+    public static readonly FindingCode TargetNameTrailingSpaceOrPeriod = new("TARGET_NAME_TRAILING_SPACE_OR_PERIOD");
+
+    /// <summary>Sibling source objects have names that differ only in letter case.</summary>
+    public static readonly FindingCode SourceCaseCollisionRisk = new("SOURCE_CASE_COLLISION_RISK");
+
     /// <summary>
     /// Every code declared above, in declaration order. For tests and diagnostics only; nothing
     /// iterates this to decide which rules run.
@@ -84,5 +96,9 @@ public static class WindowsPreflightFindingCodes
         TargetFileSystemUnknown,
         TargetComponentLimitUnknown,
         TargetFreeSpaceUnknown,
+        TargetNameInvalidCharacter,
+        TargetNameReservedDevice,
+        TargetNameTrailingSpaceOrPeriod,
+        SourceCaseCollisionRisk,
     ];
 }

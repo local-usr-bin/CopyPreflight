@@ -1,17 +1,17 @@
-# CopyPreflight — 规则评估契约（M4）
+# CopyPreflight — 规则评估契约（M4 / M5）
 
-> **状态：M4 契约已冻结。** 本文件记录规则层当前**实际实现**的规则：它们的输入、Severity、
+> **状态：M4 与 M5 契约已冻结。** 本文件记录规则层当前**实际实现**的规则：它们的输入、Severity、
 > 触发条件、边界，以及为什么某些结论只能是 Warning 或 Info。它不描述产品范围（见
 > [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)），也不描述各层职责（见 [`ARCHITECTURE.md`](ARCHITECTURE.md)）。
 
 规则层是唯一把 source facts 与 target capabilities 组合起来判断的地方。M4 是它第一次真正产出
-用户可见的 `Finding`。
+用户可见的 `Finding`；M5 在其中加入了 Windows 命名兼容性规则，而规则层仍然是纯计算。
 
 ## 1. 位置与依赖
 
 - 代码在 `src/CopyPreflight.Windows/Evaluation/`（命名空间 `CopyPreflight.Windows`，与程序集同名）。
 - 原因：本轮规则全部是 **Windows 迁移兼容性**规则（`MAX_PATH`、FAT32 单文件上限、名称组件长度、
-  reparse point 语义），且主要消费者 `TargetProbeResult` 本身就属于 Windows 层。
+  Windows 文件 / 目录名称规则、reparse point 语义），且主要消费者 `TargetProbeResult` 本身就属于 Windows 层。
 - 依赖方向不变：`CopyPreflight.Windows` → `CopyPreflight.Core`。**Core 不反向引用 Windows**，
   M4 也**没有**新增 `Rules` / `Application` / `Services` / `Infrastructure` 等项目。
 
@@ -37,6 +37,10 @@ public sealed class WindowsPreflightEvaluator
 没有动态插件加载、没有 service locator、没有规则脚本。`WindowsPreflightFindingCodes.All`
 只是一个供测试与诊断枚举的常量清单，**不参与**发现、排序或分发。
 
+名称规则共用一个极小的 `internal static SourceRelativePathComponents`（把 relative path 切成
+leaf name 与 parent directory）。它只是字符串切分，**不是**路径抽象层、不是 plugin 接口，
+也不做任何 normalization。M5 只为一个规则类新增了它，没有新增规则注册、发现或分发机制。
+
 ## 3. FindingCode
 
 `FindingCode` 是**规则**的稳定标识，不是消息标识：标题 / 解释 / 影响 / 建议可以改写，code 不变；
@@ -57,8 +61,12 @@ public sealed class WindowsPreflightEvaluator
 | `TargetFileSystemUnknown` | `TARGET_FILESYSTEM_UNKNOWN` |
 | `TargetComponentLimitUnknown` | `TARGET_COMPONENT_LIMIT_UNKNOWN` |
 | `TargetFreeSpaceUnknown` | `TARGET_FREE_SPACE_UNKNOWN` |
+| `TargetNameInvalidCharacter` | `TARGET_NAME_INVALID_CHARACTER` |
+| `TargetNameReservedDevice` | `TARGET_NAME_RESERVED_DEVICE` |
+| `TargetNameTrailingSpaceOrPeriod` | `TARGET_NAME_TRAILING_SPACE_OR_PERIOD` |
+| `SourceCaseCollisionRisk` | `SOURCE_CASE_COLLISION_RISK` |
 
-这 12 个 code 被测试逐个钉住（`WindowsPreflightFindingCodesTests`），并且有一条测试证明
+这 16 个 code 被测试逐个钉住（`WindowsPreflightFindingCodesTests`），并且有一条测试证明
 **每一个声明出来的 code 都确实会被某条规则产出**。
 
 ## 4. 规则清单
@@ -188,7 +196,104 @@ public sealed class WindowsPreflightEvaluator
   **不能**说"复制一定失败"。
 - 当空间足够时**不产生**"空间足够"的 Success finding —— 那不能证明真实迁移一定有足够空间。
 
-## 5. 为什么空间规则当前只能是 Warning
+### 4.9 Windows 名称兼容性 —— 三项检查（M5）
+
+只检查每个 `SourceEntry` 自己要在目标创建的**那一个 leaf name**：
+
+```text
+folder\sub\a.txt   →   只检查 a.txt
+```
+
+`folder` / `sub` 各有自己的 `SourceEntry`，在它们自己那里检查；这样避免一个祖先的名称问题
+在每个 descendant 上重复报告成千上万次。同理，**不会**对整个 relative path 字符串搜索 `\` 或 `:`
+——反斜杠本身是路径分隔符，对整条路径搜索它只会把每一个嵌套路径都报成"名称含非法字符"。
+
+leaf name 由字符串自身的分隔符切分得到（`SourceRelativePathComponents`），**不使用**
+`Path.GetDirectoryName`：它会把 `a:.txt` 的目录解析成卷限定符 `a:`，还会折叠重复分隔符，
+而这里要判断的恰是可能含这类字符的名称。
+
+同一名称同时命中多项时，**每一项各出一条 finding**（例如 `NUL.` 既是保留设备名又结尾是句点）。
+两个事实互相独立，只报第一个会让用户"修一个、再跑一次、又发现下一个"。
+
+| 检查 | FindingCode | Severity |
+| --- | --- | --- |
+| 名称含普通 Windows 名称不能使用的字符 | `TARGET_NAME_INVALID_CHARACTER` | Error |
+| 名称是 Windows 保留设备名 | `TARGET_NAME_RESERVED_DEVICE` | Error |
+| 名称以空格或句点结尾 | `TARGET_NAME_TRAILING_SPACE_OR_PERIOD` | Warning |
+
+**（1）非法字符 → Error**
+
+- 集合：`< > : " / \ | ? *`，以及 `U+0000` ～ `U+001F`。
+- 边界精确：`U+0020`（普通空格）**不是**非法字符；它只有在**结尾**时被第（3）项捕获。
+- `/` 与 `\` 保留在集合里，是为了忠实表达 Microsoft 文档给出的那份字符集；由分隔符切分得到的
+  leaf name 实际上不可能含有其中一个，因此这一项不会造成误报。
+- `:` 在 ADS 语法中有特殊含义，但 M5 **不处理** Alternate Data Streams：作为普通文件 / 目录
+  leaf name 的组成部分，它按保留字符处理。
+- 文本：说明名称含哪些字符（控制字符渲染为 `U+XXXX`，不把控制字符原样送进用户可见文本），
+  影响段说明该对象**无法按当前名称通过普通 Windows 文件命名语义**创建到目标位置，
+  建议段请用户在迁移前自行重命名，或按适合其实际环境的方式处理。
+- **不**自动重命名、**不**替换字符、**不**猜替换方案。
+
+**（2）保留设备名 → Error**
+
+- 集合（**只**包含 Microsoft 明确文档化的那些）：
+  `CON`、`PRN`、`AUX`、`NUL`、`COM1`–`COM9`、`LPT1`–`LPT9`，
+  以及文档化的大写上标形式 `COM¹`/`COM²`/`COM³` 与 `LPT¹`/`LPT²`/`LPT³`（`U+00B9`/`U+00B2`/`U+00B3`）。
+- 匹配大小写不敏感，对文件与目录同样适用；reparse point 也一样——名称是否含非法字符 /
+  是否为保留设备名，与是否知道它的 reparse target 无关（见 §4.10 末）。
+- **扩展名不能解除保留语义**：判断基于 leaf name 中**第一个 `.` 之前**的 base portion，
+  因此 `NUL`、`nul`、`NUL.txt`、`NUL.tar.gz`、`COM1.log`、`lpt9.bin`、`COM¹.txt` 都触发。
+- 以 `.` 开头不算"base portion 是保留名"：`.temp` 的 base portion 为空，是普通名称。
+- **不误报**：`COM0`、`COM10`、`LPT0`、`LPT10`、`CONSOLE`、`NULX`、`AUXILIARY` 都是普通名称。
+  这是文档给出的**固定清单**，不是一个通用的 DOS device name parser。
+- 文本：指明 base portion 是哪个设备名，并说明扩展名不解除保留语义（Microsoft 文档把
+  `NUL.txt` 与 `NUL.tar.gz` 都表述为等价于 `NUL`）。
+
+**（3）结尾空格 / 句点 → Warning**
+
+- 条件：leaf name 的**最后一个字符**是普通空格 `U+0020` 或句点 `.`。
+- **只看结尾**：`.temp`、`file.txt`、`file name.txt` 都不触发。
+- 文本必须同时说清三件事：这是 **Windows Shell / 应用兼容性**风险；
+  **底层文件系统**可能支持这类名称；**实际复制工具**的行为也会不同。
+- **不得**声称"一定不能复制"。措辞只能是"可能被拒绝、被截断，或以其他方式被不同处理"，
+  因此对象可能以**不同于源名称**的名字到达，甚至不再是一个独立对象。
+- **不** Trim 后偷偷改名、**不**自动改名。
+
+### 4.10 仅大小写不同的兄弟名称碰撞 → Warning
+
+- 检查范围严格限定为**同一个 parent relative directory 内**的 sibling entries。
+  分组键是「parent relative path + leaf name」，其中：
+  - **parent 按 `Ordinal` 精确相同**——碰撞说的是"同一目录里的两个名字"，`dir1\A.txt` 与
+    `dir2\a.txt` 分属两个目录，不构成碰撞。两个**父目录名本身**仅大小写不同是另一个问题，
+    由这两个目录名各自作为 entry 时产生的碰撞 finding 回答。
+  - **leaf name 按 `OrdinalIgnoreCase` 相同**——这是把大小写变体归入同一组的唯一依据。
+- 只有当某个 group 里存在**两个以上 `Ordinal` 上互不相同**的名称时才产生 finding。
+  同一个名字出现两次不算碰撞（它就是一个名字）。
+- **一个 group 一条 finding**，不是两两配对：`A.txt` + `A.TXT` + `a.txt` 是一条，而不是三条。
+  分组用 dictionary 完成，不做 O(n²) 两两比较。
+- 名称列表按 `Ordinal` 排序后写进 `Explanation`，因此文本只取决于观察到了哪些名称，
+  与 inventory 的到达顺序无关。
+- `Finding.SourceRelativePath` 是该 finding 所属的 **parent relative directory**；
+  碰撞发生在 source root 的直接子项之间时为 `null`（source root 自身没有 relative path）。
+- 文件、目录、reparse point **都参与**分组：每一个都占用一个名称。
+  规则**不跟随** reparse point、**不分类**、**不读** `LinkTarget`。
+- 对 Windows 上大小写不敏感的最常见情形，这类名称会映射到同一个对象，因此值得提醒；
+  但它**只能**是 Warning，理由见 §5.2。
+
+### 4.11 名称规则与 extended-length namespace（`\\?\`）
+
+M4 的 `\\?\` 判断（§4.6）只作用于**传统 `MAX_PATH` 兼容性**这一条规则。M5 的名称规则
+**不因**目标路径以 `\\?\` 开头而跳过：
+
+- `\\?\` 的文档含义只是让路径**绕过传统路径解析**，它并不把保留设备名或非法字符
+  变成普通用户迁移时可以依赖的名称。
+- 因此 M5 一律按**用户级 Windows 命名语义**判断名称，而不是按"底层 API 有办法构造出特殊路径"。
+  底层 namespace 能构造出什么，与用户把文件迁移到某处时会发生什么，是两件事。
+- 这三项名称检查**不读**目标、**不拼接**目标路径，因此即使目标被拒绝也照常产生（见 §6）。
+
+## 5. 为什么这些结论停留在 Warning
+
+### 5.1 为什么可用空间规则当前只能是 Warning（M4）
 
 这不是保守措辞，而是本轮**已知事实的上限**。M4 的规则层没有：
 
@@ -201,26 +306,56 @@ public sealed class WindowsPreflightEvaluator
 以上任何一项都可能显著改变真实的空间需求。在这些事实缺失时给出 Error，等于声称比已观测事实
 更强的确定性。等目标冲突分析完成后，可以再设计更确定的 Error 条件。
 
+### 5.2 为什么仅大小写不同的名称碰撞只能是 Warning（M5）
+
+同样不是措辞上的退让，而是"没有 probe 目标"这一事实的上限：
+
+- 典型 Windows 文件系统、以及大多数复制程序所使用的 Win32 环境**不区分大小写**，
+  因此这些源对象**可能**映射到同一个名称。这是真实存在的迁移风险，也正是这条规则要提醒的事。
+- 但 **NTFS 支持 per-directory case sensitivity**：同一个卷上，不同目录的行为可以不同。
+- 某些目标文件系统与某些应用**确实能够区分**这类名称。
+- M5 **没有** probe 目标目录具体的大小写敏感性——M1 冻结的三项 capability 里没有这一项，
+  而且 M5 不得新增任何 target I/O。
+
+在这些事实缺失时给出 Error，等于声称"一定冲突"，而这一点恰恰没有被观测到。更糟的是，
+"一定冲突"会推动用户去做一次并非必需的改名。因此它是 **Warning**：问题真实存在，
+但是否成为故障取决于复制程序、目标文件系统与运行环境。
+
+> 与之对照：非法字符与保留设备名是 Error，因为它们是**名称本身**在普通 Windows 命名语义下
+> 的确定性缺陷，不依赖任何尚未观测的目标事实。而结尾空格 / 句点仍然是 Warning，
+> 因为底层文件系统与复制工具的行为确实可能不同（见 §4.9 第 3 项）。
+
 ## 6. 执行顺序与短路语义
 
 评估顺序（实现固定，**但顺序不是产品契约**，测试不得依赖"某条 finding 排第几"）：
 
 1. `SourceScanIssueRule` —— 源侧，始终执行
 2. `ReparsePointRule` —— 源侧，始终执行
-3. `TargetPathBlockerRule` —— 若目标被拒绝，产出 blocking Error 后**立即返回**
-4. `TargetCapabilityCoverageRule` —— 仅目标可用时
-5. `Fat32MaxFileSizeRule`
-6. `TargetPathComponentRule`
-7. `TraditionalPathLengthRule`
-8. `TargetFreeSpaceRule`
+3. `WindowsNameCompatibilityRule` —— 源侧，始终执行（M5）
+4. `SourceCaseCollisionRule` —— 源侧，始终执行（M5）
+5. `TargetPathBlockerRule` —— 若目标被拒绝，产出 blocking Error 后**立即返回**
+6. `TargetCapabilityCoverageRule` —— 仅目标可用时
+7. `Fat32MaxFileSizeRule`
+8. `TargetPathComponentRule`
+9. `TraditionalPathLengthRule`
+10. `TargetFreeSpaceRule`
 
 分组依据是"这条规则是否依赖目标"：
 
-- **source-only** 规则（1、2）描述源自身的事实，目标如何都成立，**始终执行**。
-- **target-dependent** 规则（4–8）在目标被拒绝时**全部跳过**：在一个不能作为目标目录的路径下
+- **source-only** 规则（1–4）描述源自身的事实，目标如何都成立，**始终执行**。
+- **target-dependent** 规则（6–10）在目标被拒绝时**全部跳过**：在一个不能作为目标目录的路径下
   拼目标路径，或推演一个根本不会发生迁移的目标文件系统能力，都是在描述一件不会发生的事。
 
-因此"源扫描错误 + 目标不可用错误"**可以同时出现**，目标失败不会丢掉已经知道的源问题。
+**M5 的四条名称规则属于哪一组，是由"它是否消费目标事实"决定的，而不是由它的 code 前缀拼写决定的。**
+非法字符、保留设备名、结尾空格 / 句点描述的是**名称自身的属性**——它们既不读取任何一项 target
+capability，也不拼接目标路径，因此在目标被拒绝时**仍然产生**（`SOURCE_CASE_COLLISION_RISK`
+同理）。一条 `TARGET_NAME_*` finding 讲的是"这个名称在普通 Windows 命名语义下会怎样"，
+不需要一个可用的目标目录才能成立。
+
+这样的取舍是有意的：如果因为目标碰巧不可用就丢掉名称 finding，用户会先修好目标、再跑一次，
+然后才第一次看到源里本来就存在的问题。
+
+因此"源扫描错误 + 源名称错误 + 目标不可用错误"**可以同时出现**，目标失败不会丢掉已经知道的源问题。
 
 ## 7. 与 TargetProbeIssue 的关系
 
@@ -242,6 +377,8 @@ public sealed class WindowsPreflightEvaluator
     **不**把 `SourceScanIssue.Diagnostic` 里那条本地化的异常消息嵌进 finding 文本
     （与 M3 对 `TargetProbeIssue.Diagnostic` 的处理原则一致）。
   - 数字格式化一律走 invariant 方式，不依赖当前区域设置。
+- M5 的名称规则遵守同一条原则：控件字符与保留名的匹配结果只取决于字符串本身，
+  `COM1`–`COM9` / `LPT1`–`LPT9` 由字符拼接构造而不是格式化整数，因此不受区域设置影响。
 - 不使用 AI、不联网、不生成长篇教育文章、不使用过度绝对的措辞。`Finding.Title` 保持短。
 
 ## 9. 纯计算边界
@@ -252,33 +389,36 @@ public sealed class WindowsPreflightEvaluator
 - 不重新扫描源，不重新探测目标
 - 不使用 `Directory` / `File` 的写 API，不创建任何 probe 文件
 
+M5 **没有**改变这一点：名称规则与大小写碰撞规则只读 `SourceScanResult` 里已有的字符串，
+既不检查目标对象是否存在，也不打开任何目标 handle，也没有引入 `TargetCollisionProbe` /
+`TargetEntryProbe` 这类东西。
+
 测试直接验证这一点：把目标目录指向一个**确定不存在**的随机路径，target-dependent 规则
-依然按输入声明的事实产生完全相同的 finding。空间的 Error 化被明确推迟，正是因为那需要
-目标冲突等**新的观测事实**，而不是规则层去偷偷读磁盘。
+依然按输入声明的事实产生完全相同的 finding，名称规则同样照常产生。空间的 Error 化被明确推迟，
+正是因为那需要目标冲突等**新的观测事实**，而不是规则层去偷偷读磁盘。
 
 ## 10. 本阶段明确未实现的规则（延期）
 
-以下内容**有意**不在 M4 范围内，不要顺手加入：
+以下内容**有意**不在 M4 / M5 范围内，不要顺手加入：
 
 - **目标冲突**：目标 `relative-path` 是否已存在、file ↔ directory 类型冲突
   （需要目标侧 I/O，属于后续 milestone）
-- **Windows 命名规则**：`< > : " / \ | ? *`、控制字符、`CON` / `PRN` / `AUX` / `NUL`、
-  `COM1`–`COM9`、`LPT1`–`LPT9`、结尾句点 / 空格。
-  这些涉及 Win32 namespace、源文件系统行为、shell 与 filesystem 的差异以及 NAS / SMB 差异，
-  风险面很大，放在后续独立 milestone
+- **目标大小写敏感性 probe**：M5 的碰撞规则只描述"可能碰撞"，不去 probe 目标
+- **Unicode normalization 深度兼容**：不做 normalization，名称按观察到的原样判断
+- **8.3 短名碰撞**、**Alternate Data Streams 检测**（`:` 只按普通保留字符处理）
 - **reparse point 精确分类**（symlink / junction / mount point / other）
 - **元数据丢失规则**（ACL / ADS / 时间戳精度等）
-- **FAT12 / FAT16 的文件上限**：本轮只在文件系统名恰好为 `FAT32` 时执行 §4.4。
+- **FAT12 / FAT16 的文件上限**：M4 只在文件系统名恰好为 `FAT32` 时执行 §4.4。
   名称接近但不同的文件系统（例如只报告 `FAT`）不会被套用该规则——宁可漏报，也不猜
-- **Unicode normalization 深度兼容**
 - UI 集成、规则插件系统、报告序列化
 
-## 11. 与 M1 / M2 / M3 的关系
+## 11. 与 M1 / M2 / M3 / M4 的关系
 
-M4 **没有修改**前几个里程碑的任何模型或契约：
+M4 与 M5 **都没有修改**前几个里程碑的任何模型或契约：
 
 - `Finding` / `FindingCode` / `Severity` / `CapabilityValue<T>` / `TargetCapabilities` /
-  `SourceEntry` / `SourceScanResult` / `SourceScanIssue` 全部原样使用。
+  `SourceEntry` / `SourceScanResult` / `SourceScanIssue` / `SourceEntryKind` 全部原样使用。
 - `SourceScanIssue` **没有**被加上 Severity（那仍属于规则层）。
 - 扫描器与目标探测的 public contract 未变；规则层只消费它们的输出。
-- 没有新增第三方依赖，没有新增运行时项目。
+- M4 已发布的 12 个 FindingCode 一个都没有改名、没有复用（§3 只做了追加）。
+- 没有新增第三方依赖，没有新增运行时项目；仍然是 Core / Windows / App / Tests 四个项目。
