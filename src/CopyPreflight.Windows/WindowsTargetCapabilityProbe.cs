@@ -21,6 +21,14 @@ namespace CopyPreflight.Windows;
 /// expected outcome, not a failure of the probe.
 /// </para>
 /// <para>
+/// Whether the target is a usable directory is decided from <b>positive evidence only</b>: a
+/// directory Windows actually reported, or a free-space answer that only a directory can produce.
+/// A query that fails to answer is never taken as proof that the target is unusable, because Windows
+/// is documented not to answer the attribute query for a network share root such as
+/// <c>\\Server\Share</c> — a target this probe must support. That failure therefore holds nothing
+/// back; the remaining questions are still asked.
+/// </para>
+/// <para>
 /// The probe is strictly read-only. It never creates a file, creates a directory, writes an
 /// alternate data stream or changes an ACL, so it cannot and does not claim that a target is
 /// writable — only that Windows answered these particular queries.
@@ -44,6 +52,15 @@ public sealed class WindowsTargetCapabilityProbe
     private const string GetDiskFreeSpaceExOperation = "GetDiskFreeSpaceExW";
     private const string GetVolumePathNameOperation = "GetVolumePathNameW";
     private const string GetVolumeInformationOperation = "GetVolumeInformationW";
+
+    private const string NotADirectoryReason =
+        "The target path names an existing object that is not a directory.";
+
+    private const string MalformedNameReason =
+        "Windows rejected the target path as a malformed name.";
+
+    private const string UnreachableTargetReason =
+        "No usable object could be reached at the target path.";
 
     private const string UnavailableTargetReason =
         "The target path is not an available directory, so nothing about its file system is known.";
@@ -97,6 +114,12 @@ public sealed class WindowsTargetCapabilityProbe
     /// unknown.
     /// </para>
     /// <para>
+    /// A target Windows will not describe by attribute — notably a network share root — is only
+    /// reported as unusable if no other query could reach a directory through it either. The
+    /// free-space question in particular is asked before that conclusion is drawn, so a share root
+    /// that answers it is probed normally.
+    /// </para>
+    /// <para>
     /// Nothing is written to the target at any point, including to check whether it is writable.
     /// </para>
     /// </remarks>
@@ -112,66 +135,82 @@ public sealed class WindowsTargetCapabilityProbe
         var targetPath = Path.GetFullPath(targetDirectoryPath);
         var issues = new List<TargetProbeIssue>();
 
-        if (!IsUsableTargetDirectory(targetPath, issues))
+        // Step 1 — what kind of object the target names. A failure to answer is recorded as an error
+        // code but is deliberately not treated as unavailability: Windows does not answer this
+        // question for a network share root, which is a target this probe must support.
+        var identity = ProbeTargetIdentity(targetPath, out var identityError);
+
+        if (identity == TargetIdentity.NotADirectory)
         {
-            return new TargetProbeResult(targetPath, UnavailableTargetCapabilities(), issues);
-        }
-
-        // From here the target is an existing directory, and each capability is established on its
-        // own so that one failure cannot discard another capability that was obtained.
-        var availableFreeBytes = ProbeAvailableFreeBytes(targetPath, issues);
-        var volume = ProbeVolume(targetPath, issues);
-
-        return new TargetProbeResult(
-            targetPath,
-            new TargetCapabilities(volume.FileSystemName, availableFreeBytes, volume.MaxPathComponentLength),
-            issues);
-    }
-
-    /// <summary>
-    /// Confirms that a usable directory is reachable at the target, recording why it is not
-    /// otherwise. This is a read-only attribute query: it observes the path, it does not write to it.
-    /// </summary>
-    private bool IsUsableTargetDirectory(string targetPath, List<TargetProbeIssue> issues)
-    {
-        if (!_fileSystemApi.TryGetFileAttributes(targetPath, out var attributes, out var nativeError))
-        {
-            // A rejected name is a different fact from a name that is well formed but leads nowhere,
-            // and Windows already distinguishes them. Its answer is reported, not reinterpreted.
-            var kind = nativeError == ErrorInvalidName
-                ? TargetProbeIssueKind.TargetPathInvalid
-                : TargetProbeIssueKind.TargetPathUnavailable;
-
-            issues.Add(CreateIssue(
-                kind,
-                targetPath,
-                GetFileAttributesOperation,
-                nativeError,
-                kind == TargetProbeIssueKind.TargetPathInvalid
-                    ? "Windows rejected the target path as a malformed name."
-                    : "No usable object could be reached at the target path."));
-
-            return false;
-        }
-
-        if ((attributes & FileAttributes.Directory) == 0)
-        {
-            // The target is expected to be a directory, so an existing file is not a usable target.
+            // A positive observation: Windows found an object there and it is not a directory, so
+            // the target cannot be used and there is no point asking anything else about it.
             issues.Add(CreateIssue(
                 TargetProbeIssueKind.TargetPathUnavailable,
                 targetPath,
                 GetFileAttributesOperation,
                 nativeError: 0,
-                "The target path names an existing object that is not a directory."));
+                NotADirectoryReason));
 
-            return false;
+            return new TargetProbeResult(targetPath, UnavailableTargetCapabilities(), issues);
         }
 
-        return true;
+        // Step 2 — the space available to the caller. This is asked of every target that might be a
+        // directory, and its answer doubles as evidence that a directory is reachable: Windows
+        // answers it for a directory (including a share root) and refuses it for a file.
+        var freeSpace = ProbeAvailableFreeBytes(targetPath);
+
+        if (identity != TargetIdentity.Directory && !freeSpace.Answered)
+        {
+            // No query produced positive evidence of a usable directory, so there is nothing to
+            // describe. The volume questions are not asked, because a volume path can be resolved
+            // from a name alone and would describe a volume the target may not even reach.
+            issues.Add(CreateUnavailableTargetIssue(targetPath, identityError, freeSpace.NativeError));
+
+            return new TargetProbeResult(targetPath, UnavailableTargetCapabilities(), issues);
+        }
+
+        // From here the target is a reachable directory, and each capability is established on its
+        // own so that one failure cannot discard another capability that was obtained.
+        if (freeSpace.Issue is not null)
+        {
+            issues.Add(freeSpace.Issue);
+        }
+
+        var volume = ProbeVolume(targetPath, issues);
+
+        return new TargetProbeResult(
+            targetPath,
+            new TargetCapabilities(volume.FileSystemName, freeSpace.Value, volume.MaxPathComponentLength),
+            issues);
+    }
+
+    /// <summary>
+    /// Establishes what kind of object the target names, through a read-only attribute query: it
+    /// observes the path, it does not write to it.
+    /// </summary>
+    /// <param name="targetPath">The normalized target directory path.</param>
+    /// <param name="nativeError">
+    /// The error Windows reported when it did not answer, or <c>0</c> when it did.
+    /// </param>
+    private TargetIdentity ProbeTargetIdentity(string targetPath, out int nativeError)
+    {
+        if (!_fileSystemApi.TryGetFileAttributes(targetPath, out var attributes, out nativeError))
+        {
+            // Windows is documented not to answer this query for a network share root, so a failure
+            // proves nothing about whether the target is usable. The error code is kept so that an
+            // unusable target can still be classified once the other queries have had their say.
+            return TargetIdentity.Undetermined;
+        }
+
+        nativeError = 0;
+
+        return (attributes & FileAttributes.Directory) != 0
+            ? TargetIdentity.Directory
+            : TargetIdentity.NotADirectory;
     }
 
     /// <summary>Establishes how much space the calling user still has on the target's volume.</summary>
-    private CapabilityValue<long> ProbeAvailableFreeBytes(string targetPath, List<TargetProbeIssue> issues)
+    private FreeSpaceProbe ProbeAvailableFreeBytes(string targetPath)
     {
         // Windows documents that a UNC name must carry a trailing backslash, and a directory path is
         // valid with one. The separator is therefore normalized once for every target rather than
@@ -184,27 +223,38 @@ public sealed class WindowsTargetCapabilityProbe
                 out var availableToCaller,
                 out var nativeError))
         {
-            issues.Add(CreateIssue(
-                TargetProbeIssueKind.FreeSpaceQueryFailed,
-                queryPath,
-                GetDiskFreeSpaceExOperation,
-                nativeError,
-                FreeSpaceNotReportedReason));
-
-            return CapabilityValue<long>.Unknown(FreeSpaceNotReportedReason);
+            return new FreeSpaceProbe(
+                Answered: false,
+                NativeError: nativeError,
+                Value: CapabilityValue<long>.Unknown(FreeSpaceNotReportedReason),
+                Issue: CreateIssue(
+                    TargetProbeIssueKind.FreeSpaceQueryFailed,
+                    queryPath,
+                    GetDiskFreeSpaceExOperation,
+                    nativeError,
+                    FreeSpaceNotReportedReason));
         }
 
         if (availableToCaller > long.MaxValue)
         {
             // The native quantity is unsigned. Wrapping or clamping it would turn a real number into
-            // a wrong one, so the amount is left unknown and the limitation is stated instead.
-            return CapabilityValue<long>.Unknown(
-                $"Windows reported {availableToCaller} bytes available to the current user on the target, " +
-                $"which exceeds the largest value the capability model can represent ({long.MaxValue}). " +
-                "The amount is left unknown rather than truncated.");
+            // a wrong one, so the amount is left unknown and the limitation is stated instead. The
+            // query itself did answer, so it is still evidence of a reachable directory.
+            return new FreeSpaceProbe(
+                Answered: true,
+                NativeError: 0,
+                Value: CapabilityValue<long>.Unknown(
+                    $"Windows reported {availableToCaller} bytes available to the current user on the target, " +
+                    $"which exceeds the largest value the capability model can represent ({long.MaxValue}). " +
+                    "The amount is left unknown rather than truncated."),
+                Issue: null);
         }
 
-        return CapabilityValue<long>.Known((long)availableToCaller);
+        return new FreeSpaceProbe(
+            Answered: true,
+            NativeError: 0,
+            Value: CapabilityValue<long>.Known((long)availableToCaller),
+            Issue: null);
     }
 
     /// <summary>
@@ -297,6 +347,34 @@ public sealed class WindowsTargetCapabilityProbe
         return CapabilityValue<int>.Known((int)reportedLength);
     }
 
+    /// <summary>
+    /// Builds the single issue that explains why no usable directory could be reached, keeping the
+    /// error Windows actually gave instead of classifying it from the shape of the path.
+    /// </summary>
+    /// <remarks>
+    /// A name Windows refuses outright is a different fact from a name that is well formed but leads
+    /// nowhere, and the two are reported apart. The issue is attributed to whichever query reported
+    /// an error, so the evidence and its source stay together.
+    /// </remarks>
+    private static TargetProbeIssue CreateUnavailableTargetIssue(
+        string targetPath,
+        int identityError,
+        int freeSpaceError)
+    {
+        var (operation, nativeError) = identityError != 0
+            ? (GetFileAttributesOperation, identityError)
+            : (GetDiskFreeSpaceExOperation, freeSpaceError);
+
+        return CreateIssue(
+            nativeError == ErrorInvalidName
+                ? TargetProbeIssueKind.TargetPathInvalid
+                : TargetProbeIssueKind.TargetPathUnavailable,
+            targetPath,
+            operation,
+            nativeError,
+            nativeError == ErrorInvalidName ? MalformedNameReason : UnreachableTargetReason);
+    }
+
     /// <summary>The capability set of a target that could not be reached as a directory.</summary>
     private static TargetCapabilities UnavailableTargetCapabilities()
         => new(
@@ -328,4 +406,39 @@ public sealed class WindowsTargetCapabilityProbe
             // report, so it becomes no error code rather than a fabricated one.
             nativeError == 0 ? null : nativeError,
             nativeError == 0 ? summary : $"{summary} (native error {nativeError})");
+
+    /// <summary>
+    /// What the attribute query established about the object the target names.
+    /// </summary>
+    /// <remarks>
+    /// A failure to answer is deliberately kept apart from a negative answer. Windows does not answer
+    /// this query for a network share root, so treating its failure as "unusable" would reject a
+    /// perfectly good target.
+    /// </remarks>
+    private enum TargetIdentity
+    {
+        /// <summary>Windows did not answer, which is not evidence that the target is unusable.</summary>
+        Undetermined = 0,
+
+        /// <summary>The target is an existing directory.</summary>
+        Directory = 1,
+
+        /// <summary>The target is an existing object that is not a directory.</summary>
+        NotADirectory = 2,
+    }
+
+    /// <summary>
+    /// The outcome of the free-space query: whether Windows answered it, what the answer was worth,
+    /// and the issue to report if it did not answer.
+    /// </summary>
+    /// <remarks>
+    /// "Answered" is kept apart from "the amount is known" because a reported amount that cannot be
+    /// represented still proves that a directory is reachable, which is what the availability
+    /// decision reads this for.
+    /// </remarks>
+    private readonly record struct FreeSpaceProbe(
+        bool Answered,
+        int NativeError,
+        CapabilityValue<long> Value,
+        TargetProbeIssue? Issue);
 }

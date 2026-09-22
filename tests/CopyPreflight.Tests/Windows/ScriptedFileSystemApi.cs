@@ -25,6 +25,14 @@ internal sealed class ScriptedFileSystemApi : IWindowsFileSystemApi
     internal const int ErrorFileNotFound = 2;
     internal const int ErrorPathNotFound = 3;
     internal const int ErrorAccessDenied = 5;
+    internal const int ErrorNotSupported = 50;
+
+    /// <summary>
+    /// The error <c>GetFileAttributesW</c> is documented to report when it is pointed straight at a
+    /// network share root, where it requires a subdirectory instead.
+    /// </summary>
+    internal const int ErrorBadNetPath = 53;
+
     internal const int ErrorBadNetName = 67;
     internal const int ErrorInvalidName = 123;
 

@@ -283,10 +283,17 @@ public class WindowsTargetCapabilityProbeTests
         Assert.Empty(api.AttributePaths);
     }
 
+    /// <summary>
+    /// A target nothing can reach as a directory is reported rather than thrown at the caller. Both
+    /// queries are scripted to fail, because Windows answers both with "no such path" for a path that
+    /// does not exist.
+    /// </summary>
     [Fact]
     public void ReportsAnUnreachableTargetWithoutThrowing()
     {
-        var api = new ScriptedFileSystemApi().WithAttributeFailure(ScriptedFileSystemApi.ErrorPathNotFound);
+        var api = new ScriptedFileSystemApi()
+            .WithAttributeFailure(ScriptedFileSystemApi.ErrorPathNotFound)
+            .WithFreeSpaceFailure(ScriptedFileSystemApi.ErrorPathNotFound);
 
         var result = Probe(api);
 
@@ -296,6 +303,7 @@ public class WindowsTargetCapabilityProbeTests
         Assert.True(result.Capabilities.AvailableFreeBytes.IsUnknown);
         Assert.True(result.Capabilities.MaxPathComponentLength.IsUnknown);
 
+        // One failure, one issue: an unreachable target is not also a free-space problem.
         var issue = Assert.Single(result.Issues);
         Assert.Equal(TargetProbeIssueKind.TargetPathUnavailable, issue.Kind);
         Assert.Equal(ScriptedFileSystemApi.ErrorPathNotFound, issue.NativeErrorCode);
@@ -309,7 +317,9 @@ public class WindowsTargetCapabilityProbeTests
     [Fact]
     public void ReportsAMalformedNameAsInvalidRatherThanUnavailable()
     {
-        var api = new ScriptedFileSystemApi().WithAttributeFailure(ScriptedFileSystemApi.ErrorInvalidName);
+        var api = new ScriptedFileSystemApi()
+            .WithAttributeFailure(ScriptedFileSystemApi.ErrorInvalidName)
+            .WithFreeSpaceFailure(ScriptedFileSystemApi.ErrorInvalidName);
 
         var result = Probe(api);
 
@@ -331,18 +341,114 @@ public class WindowsTargetCapabilityProbeTests
         Assert.Null(issue.NativeErrorCode);
 
         Assert.True(result.Capabilities.FileSystemName.IsUnknown);
-    }
 
-    [Fact]
-    public void DoesNotQueryTheVolumeOfATargetThatIsNotAUsableDirectory()
-    {
-        var api = new ScriptedFileSystemApi().WithAttributeFailure(ScriptedFileSystemApi.ErrorFileNotFound);
-
-        Probe(api);
-
+        // An object that is not a directory has no volume worth describing, so nothing else is asked.
         Assert.Empty(api.FreeSpacePaths);
         Assert.Empty(api.VolumePathPaths);
         Assert.Empty(api.VolumeInformationPaths);
+    }
+
+    /// <summary>
+    /// A target no query could reach as a directory is not described. The volume path query answers
+    /// from the name alone — it resolves a path that does not exist to a root without complaint — so
+    /// asking it here would describe a volume the target never reached.
+    /// </summary>
+    [Fact]
+    public void DoesNotDescribeTheVolumeOfATargetThatIsNotAUsableDirectory()
+    {
+        var api = new ScriptedFileSystemApi()
+            .WithAttributeFailure(ScriptedFileSystemApi.ErrorFileNotFound)
+            .WithFreeSpaceFailure(ScriptedFileSystemApi.ErrorFileNotFound);
+
+        Probe(api);
+
+        Assert.Empty(api.VolumePathPaths);
+        Assert.Empty(api.VolumeInformationPaths);
+    }
+
+    /// <summary>
+    /// Windows documents that <c>GetFileAttributesW</c> fails with <c>ERROR_BAD_NETPATH</c> when it is
+    /// pointed straight at a network share root, and that a subdirectory must be named instead.
+    /// CopyPreflight must accept such a root as a target, so that failure is not a verdict: the
+    /// remaining questions are still asked, and the ones that can be answered are kept.
+    /// </summary>
+    [Fact]
+    public void KeepsProbingANetworkShareRootThatWindowsWillNotDescribeByAttribute()
+    {
+        const string UncTarget = @"\\server\share";
+
+        var api = new ScriptedFileSystemApi()
+            .WithAttributeFailure(ScriptedFileSystemApi.ErrorBadNetPath)
+            .WithFreeBytesAvailableToCaller(555_000_000)
+            .WithVolumePath(@"\\server\share\")
+            .WithVolumeInformation("NTFS", 255);
+
+        var result = Probe(api, UncTarget);
+
+        // The free-space question was asked after the attribute query failed, with the trailing
+        // backslash Windows requires of a UNC name.
+        Assert.Equal([@"\\server\share\"], api.FreeSpacePaths);
+
+        Assert.Empty(result.Issues);
+
+        Assert.True(result.Capabilities.AvailableFreeBytes.IsKnown);
+        Assert.Equal(555_000_000L, result.Capabilities.AvailableFreeBytes.Value);
+
+        Assert.Equal([@"\\server\share\"], api.VolumeInformationPaths);
+        Assert.True(result.Capabilities.FileSystemName.IsKnown);
+        Assert.Equal("NTFS", result.Capabilities.FileSystemName.Value.Value);
+        Assert.True(result.Capabilities.MaxPathComponentLength.IsKnown);
+    }
+
+    /// <summary>
+    /// The network outcome M3 exists to get right, reached through the failure Windows reports for a
+    /// share root: the free-space answer stands on its own while the file system stays undescribed.
+    /// </summary>
+    [Fact]
+    public void KeepsTheFreeSpaceOfANetworkShareRootThatRefusesToBeDescribed()
+    {
+        const string UncTarget = @"\\server\share";
+
+        var api = new ScriptedFileSystemApi()
+            .WithAttributeFailure(ScriptedFileSystemApi.ErrorBadNetPath)
+            .WithFreeBytesAvailableToCaller(4_000_000_000)
+            .WithVolumePath(@"\\server\share\")
+            .WithVolumeInformationFailure(ScriptedFileSystemApi.ErrorNotSupported);
+
+        var result = Probe(api, UncTarget);
+
+        Assert.True(result.Capabilities.AvailableFreeBytes.IsKnown);
+        Assert.Equal(4_000_000_000L, result.Capabilities.AvailableFreeBytes.Value);
+
+        // Not guessed from the fact that this is a network target: unknown stays unknown.
+        Assert.True(result.Capabilities.FileSystemName.IsUnknown);
+        Assert.True(result.Capabilities.MaxPathComponentLength.IsUnknown);
+
+        var issue = Assert.Single(result.Issues);
+        Assert.Equal(TargetProbeIssueKind.VolumeInformationQueryFailed, issue.Kind);
+    }
+
+    /// <summary>
+    /// A reported amount the model cannot represent still proves a directory was reached, so it must
+    /// not be mistaken for a query that failed and turn a good target into an unusable one.
+    /// </summary>
+    [Fact]
+    public void DoesNotTreatAnUnrepresentableFreeSpaceAmountAsAnUnreachableTarget()
+    {
+        const string UncTarget = @"\\server\share";
+
+        var api = new ScriptedFileSystemApi()
+            .WithAttributeFailure(ScriptedFileSystemApi.ErrorBadNetPath)
+            .WithFreeBytesAvailableToCaller(ulong.MaxValue)
+            .WithVolumePath(@"\\server\share\")
+            .WithVolumeInformation("NTFS", 255);
+
+        var result = Probe(api, UncTarget);
+
+        Assert.Empty(result.Issues);
+        Assert.True(result.Capabilities.AvailableFreeBytes.IsUnknown);
+        Assert.True(result.Capabilities.FileSystemName.IsKnown);
+        Assert.True(result.Capabilities.MaxPathComponentLength.IsKnown);
     }
 
     private static TargetProbeResult Probe(ScriptedFileSystemApi api, string targetDirectoryPath = TargetPath)

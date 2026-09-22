@@ -142,6 +142,9 @@ M3 实现了 §1.2 的第一版真实目标能力探测。它仍然只观察、�
 - 可用空间只取 `lpFreeBytesAvailableToCaller`（当前用户配额下真正可用的量），不使用物理总剩余空间。
 - 目标不可用（不存在 / 无法访问 / 不可达 / 名称非法）**不抛异常**，而是记录 issue 并让三项能力保持 Unknown；
   名称非法与"语法合法但达不到"分开报告。
+- 目标可用性只采信**正面证据**：`GetFileAttributesW` 报告了目录，或 `GetDiskFreeSpaceExW` 作出了回答。
+  `GetFileAttributesW` 对 network share root（如 `\\Server\Share`）按 Microsoft 文档会失败并返回
+  `ERROR_BAD_NETPATH`，该失败**不**被当作目标不可用，因此 share root 本身可以作为目标被正常探测。
 - **不做目标可写性测试**：不创建 probe 文件、不创建目录、不改 ACL，因此结果不声称目标可写。
 - Windows 具体实现与新引入的 Win32 interop 都在 `CopyPreflight.Windows`；Core 保持 `net10.0` 无 P/Invoke。
 

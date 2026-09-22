@@ -84,7 +84,32 @@ target path 预期为**目标目录**。
 - 目标不可用**不是异常**，而是"这个目标不可用"这一事实。探测结果仍然返回，只是三项能力都是 Unknown。
 - 名称非法与"名字合法但通向虚无"是**两种不同事实**，Windows 自己就区分它们（`ERROR_INVALID_NAME` vs
   `ERROR_FILE_NOT_FOUND` / `ERROR_PATH_NOT_FOUND` / 网络错误码），因此分开报告而不是合并。
-- 目标不可用时，后续的卷与空间查询**不会被尝试**：没有可用目标就没有可探测的卷。M3 不为目标建立完整状态机。
+- 目标不可用时只产生**一个** issue：不可达不同时算作一次"可用空间查询失败"，同一件事不重复计数。
+- 目标不可用时，卷相关查询**不会被尝试**：`GetVolumePathNameW` 只看名字就能给出 root，对不可达目标问它
+  会描述一个目标从未到达的卷。M3 不为目标建立完整状态机。
+
+### 5.1 "可用目录"如何判定：只采信正面证据
+
+**一项查询失败，不等于目标不可用。**判定按以下顺序进行：
+
+1. 先问 `GetFileAttributesW`（对象的身份与类型）：
+   - **成功**且是目录 → 目标可用，继续。
+   - **成功**但不是目录 → 目标不可用（`TargetPathUnavailable`），停止。
+   - **失败** → **不作结论**，继续（原因见 §6.4）。
+2. 再问 `GetDiskFreeSpaceExW`（可用空间，见 §6.2）：
+   - 成功 → 取得 `AvailableFreeBytes`；并且"Windows 对一个目录回答了这个问题"本身就是目标可达的正面证据。
+   - 失败 → 记录 `FreeSpaceQueryFailed`，但**不因此停止**。
+3. 若第 1 步没得到"是目录"、第 2 步也没有回答，则**没有任何正面证据**表明此处存在可用目录：
+   报 `TargetPathUnavailable`（名称为 `ERROR_INVALID_NAME` 时是 `TargetPathInvalid`），三项能力全 Unknown，
+   并且不再问卷。
+4. 否则目标可用，卷相关查询照常进行，三项能力仍各自独立。
+
+因此判据是：**目标可用** ⇔ `GetFileAttributesW` 报告了目录 **或** `GetDiskFreeSpaceExW` 作出了回答；
+**目标不可用** ⇔ 有正面证据表明存在但不是目录，**或** 完全没有任何正面证据。
+
+`GetVolumePathNameW` **不参与**这个判定：它对不存在的路径也能给出 root
+（实测 `C:\cp-no-such-dir-xyz` → `C:\`），是纯语法解析，不构成可达性证据。若把它当作可用性判据，
+不存在的路径会因为卷被解析出来而错误地报告 `FileSystemName = Known(...)`。
 
 ## 6. Windows API 与语义选择
 
@@ -92,9 +117,9 @@ target path 预期为**目标目录**。
 
 | API | 用途 | 关键语义 |
 | --- | --- | --- |
-| `GetFileAttributesW` | 确认目标路径上存在可用的目录 | 只读属性查询；失败时保留 Windows 报的 native error |
-| `GetVolumePathNameW` | 取得 Windows 认为该目标实际所属的 **volume mount point** | 不使用 `Path.GetPathRoot` |
-| `GetDiskFreeSpaceExW` | 取得可用空间 | 只读 `lpFreeBytesAvailableToCaller` |
+| `GetFileAttributesW` | 确认目标路径上对象的身份与类型（目录 / 非目录） | 只读属性查询；**失败不等于目标不可用**，见 §6.4 |
+| `GetVolumePathNameW` | 取得 Windows 认为该目标实际所属的 **volume mount point** | 不使用 `Path.GetPathRoot`；对不可达路径也作答，因此不作为可用性判据 |
+| `GetDiskFreeSpaceExW` | 取得可用空间 | 只读 `lpFreeBytesAvailableToCaller`；只对目录作答，故同时是可达性证据 |
 | `GetVolumeInformationW` | 取得文件系统名称与组件长度上限 | 只读 `lpFileSystemNameBuffer` / `lpMaximumComponentLength` |
 
 ### 6.1 为什么 volume root 用 `GetVolumePathNameW` 而不是 `Path.GetPathRoot`
@@ -121,6 +146,9 @@ UNC 语义：Windows 文档要求 UNC 名称带结尾反斜杠。探测器对**�
 （对目录路径是幂等的），而不是只对 UNC 特判：这样本地、挂载点与网络目标走同一条代码路径，
 并且不会把 UNC 路径转写成任何别的东西。
 
+`GetDiskFreeSpaceExW` **官方支持 UNC share root 本身**（`\\Server\Share\`），所以
+`\\NAS\Backup` 这样的目标可以被正常询问可用空间。这也是 share root 能通过 §5.1 判定为目标可用的原因。
+
 ### 6.3 原生无符号量与 `long` / `int` 模型
 
 native 可用空间是无符号 64 位，capability 模型存 `long`；组件长度是 `DWORD`，模型存 `int`。
@@ -131,6 +159,27 @@ native 可用空间是无符号 64 位，capability 模型存 `long`；组件长
 
 > 上述两种情况都不产生 issue：查询本身成功了，只是观察到的值无法进入模型。限制写在 capability
 > 自身的诊断里，信息不会丢失。
+
+### 6.4 为什么 `GetFileAttributesW` 的失败不能当作"目标不可用"（M3 修正）
+
+Microsoft 的 `GetFileAttributesW` 文档明确说明：直接对 network share root（例如 `\\Server\Share`）调用，
+函数**会失败并返回 `ERROR_BAD_NETPATH`**，必须改为指定 share 下的子目录。
+
+但 CopyPreflight 必须支持用户把 UNC share root 本身作为目标（例如 `\\NAS\Backup`）。因此：
+
+- `GetFileAttributesW` 的**成功是结论性的**：对象存在，且能分辨它是不是目录；
+- `GetFileAttributesW` 的**失败是非结论性的**：不得据此中止后续探测。
+
+`GetDiskFreeSpaceExW` 与 `GetVolumePathNameW` 都具备 network share 语义，所以 share root 仍能被正常探测；
+`GetDiskFreeSpaceExW` 恰好又只对目录作答（对文件返回 `ERROR_DIRECTORY`），因此它同时提供了
+"此处存在可用目录"的正面证据（见 §5.1）。
+
+`GetFileAttributesW` 因此仍然保留，但职责收窄为**正面证据**：区分"存在的目录"与"存在但不是目录的对象"，
+并给出名称被拒（`ERROR_INVALID_NAME`）时的 native error。它的失败不再是一道闸门。
+
+> 实测：本机 `GetFileAttributesW(@"\\localhost\C$")` 返回**成功**（loopback 特例），因此这条文档行为
+> **无法**在本开发机上真实复现；它由 seam 测试以 `ERROR_BAD_NETPATH` 驱动验证。行为按 Microsoft
+> 官方说明处理，不依赖本机巧合。
 
 ## 7. 只读：不做目标可写性测试
 
