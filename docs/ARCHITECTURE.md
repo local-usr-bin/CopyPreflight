@@ -72,8 +72,8 @@ finding 是**描述性的**，它不触发任何变更操作。
 
 - `CopyPreflight.Core` —— 承载 1.1–1.4 的职责，**不依赖 WPF**，**不依赖** `CopyPreflight.App` 或
   `CopyPreflight.Windows`；保持 `net10.0`，不含 Win32 P/Invoke。
-- `CopyPreflight.Windows` —— 承载 1.2 的 Windows 具体实现（Win32 interop、Windows 卷 / 目标发现），
-  引用 `CopyPreflight.Core`。平台限定为 `net10.0-windows`。
+- `CopyPreflight.Windows` —— 承载 1.2 的 Windows 具体实现（Win32 interop、Windows 卷 / 目标发现）
+  与 1.3 的规则评估（见 §4.4），引用 `CopyPreflight.Core`。平台限定为 `net10.0-windows`。
 - `CopyPreflight.App` —— 承载 1.5，引用 `CopyPreflight.Core`。
 - `CopyPreflight.Tests` —— 引用 `CopyPreflight.Core` 与 `CopyPreflight.Windows`。
 
@@ -81,7 +81,8 @@ finding 是**描述性的**，它不触发任何变更操作。
 也不需要 Win32 的情况下被思考与测试。
 
 > M0 只固定了"Core 不依赖 UI"这一条方向性约束。M1 进一步确定了最小核心领域模型的类型与语义（见 §4.1），
-> M2 确定了源扫描器的公开契约与结果模型（见 §4.2），M3 确定了目标能力探测的 Windows 实现与契约（见 §4.3）。
+> M2 确定了源扫描器的公开契约与结果模型（见 §4.2），M3 确定了目标能力探测的 Windows 实现与契约（见 §4.3），
+> M4 确定了规则评估的入口与已实现规则（见 §4.4）。
 
 ## 4. 本阶段已确定 / 未确定的事
 
@@ -151,13 +152,44 @@ M3 实现了 §1.2 的第一版真实目标能力探测。它仍然只观察、�
 完整的目标探测契约（输入路径语义、四个 Win32 API 及其语义选择、部分成功、只读边界、issue 模型）见
 [`TARGET_PROBING.md`](TARGET_PROBING.md)。
 
-### 4.4 仍未确定
+### 4.4 M4 已确定：规则评估基线
+
+M4 实现了 §1.3 的第一版规则层，也是第一次真正产出 §1.4 的 `Finding`。它仍然只判断、只报告：
+不复制、不移动、不写探测文件。
+
+| 职责 | 类型 | 语义 |
+| --- | --- | --- |
+| 1.3 rule evaluation | `WindowsPreflightEvaluator` | 消费 `SourceScanResult` 与 `TargetProbeResult`，产出 `Finding` 列表；同步、无状态、纯计算 |
+| 1.3 rule evaluation | `WindowsPreflightFindingCodes` | 当前已实现规则的稳定 code 常量（12 个），供日志与测试匹配；**不是** registry |
+
+关键边界：
+
+- 规则层是**唯一**同时消费 source facts 与 target capabilities 的地方，也是唯一决定 Severity 的地方。
+  `SourceScanIssue` 与 `TargetProbeIssue` 都没有、也不会获得 Severity。
+- 评估是**纯计算**：不进行文件系统 I/O，不重新扫描源，不重新探测目标，不检查目标路径是否已存在，
+  不修改任何东西；相同输入必然产生相同输出。
+- **source-only** 规则（源扫描失败、reparse point）始终执行；**target-dependent** 规则在目标被拒绝
+  （`TargetPathInvalid` / `TargetPathUnavailable`）时全部跳过并短路。因此源侧错误与目标不可用错误可以同时出现。
+- 未知目标能力产生的是 **Info**（说明哪项检查没能做成），每项最多一条 target-wide，不按 entry 重复；
+  也**不**为同一件事把 `TargetProbeIssue` 再暴露一遍。
+- 只有基于已知事实确定会阻止迁移的结论才是 Error。空间不足仍是 Warning，因为尚未做目标冲突、
+  覆盖策略与分配语义分析。
+- 实现放在 `CopyPreflight.Windows`（命名空间 `CopyPreflight.Windows`），因为本轮规则全部是 Windows
+  迁移兼容性规则，且主要消费者 `TargetProbeResult` 属于该层。**没有**为此新增 `Rules` /
+  `Application` / `Services` / `Infrastructure` 等项目，也没有引入 DI、registry、反射发现或插件机制。
+
+完整的规则清单、每条规则的触发条件与边界、短路语义以及文本与确定性要求见
+[`RULES.md`](RULES.md)。
+
+### 4.5 仍未确定
 
 为避免过度设计，以下内容仍然**不予确定**，留待有真实需求驱动的里程碑：
 
-- 规则的执行接口与注册方式（RuleEngine / registry / discovery / plugin）
-- 具体规则的实现（FAT32 单文件上限、空间、路径长度、文件名合法性、冲突等）
+- 规则的插件化：M4 只需要八条固定规则，因此规则由 `WindowsPreflightEvaluator` 直接按名字调用；
+  registry / discovery / plugin / 规则脚本仍然不存在，也不打算在没有真实需求时建立
+- 尚未实现的规则：目标对象冲突与 file ↔ directory 类型冲突、Windows 文件名与保留名称、非法字符、
+  结尾句点 / 空格、reparse point 精确分类、元数据（ACL / ADS / 时间戳）丢失规则
 - findings 的展示形式与序列化方式
-- 扫描器与目标探测在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
+- 扫描器、目标探测与规则评估在 UI 中的调度方式（在哪个线程运行、如何在展示层呈现进度与取消）
 
 这些应在有真实需求驱动时再确定，避免在缺乏事实的情况下把接口设计死。

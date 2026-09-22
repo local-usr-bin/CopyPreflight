@@ -1,0 +1,95 @@
+using System.Runtime.Versioning;
+using CopyPreflight.Core;
+
+namespace CopyPreflight.Windows;
+
+/// <summary>
+/// Turns what was observed about a source tree and a target directory into user-facing findings.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This is the rule layer: the only place where source facts and target capabilities are combined.
+/// It answers one question, <i>"given what was observed on both sides, what should the user know
+/// before migrating?"</i>, and it produces nothing else.
+/// </para>
+/// <para>
+/// Evaluation is a <b>pure computation</b>. It performs no file system I/O, does not re-scan the
+/// source, does not re-probe the target, does not touch the target directory (not even to check
+/// whether a destination path already exists) and never modifies anything. Given the same two
+/// inputs it always produces the same findings, in the same order, and it returns findings rather
+/// than printing or storing them.
+/// </para>
+/// <para>
+/// The rules described here are Windows migration compatibility rules — <c>MAX_PATH</c> behaviour,
+/// a FAT32 file-size ceiling, path component limits, reparse point handling — so this type lives in
+/// the Windows layer next to <see cref="TargetProbeResult"/>, which it consumes.
+/// </para>
+/// <para>
+/// The order of the returned sequence is <b>not</b> a product contract; it happens to be stable
+/// because the rules always run in the same order. Presentation is free to sort by severity, code
+/// or path. Tests must not depend on which position a particular finding occupies.
+/// </para>
+/// <para>
+/// The type holds no state, so one instance can be reused for any number of evaluations.
+/// </para>
+/// </remarks>
+[SupportedOSPlatform("windows")]
+public sealed class WindowsPreflightEvaluator
+{
+    /// <summary>Evaluates every implemented rule against one scanned source and one probed target.</summary>
+    /// <param name="source">What the scanner observed in the source tree.</param>
+    /// <param name="target">What the target probe established about the target directory.</param>
+    /// <returns>
+    /// The findings the implemented rules produced, possibly empty. An empty result means
+    /// "no known blocking issue was detected", never "the copy will succeed".
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="source"/> or <paramref name="target"/> is <see langword="null"/>.
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// Source-only rules — the scan failures and the reparse point warning — always run, because
+    /// they describe facts about the source that remain true whatever the target turns out to be.
+    /// </para>
+    /// <para>
+    /// If the target is itself rejected as a destination (Windows refused the path, or no usable
+    /// directory could be reached through it), the target-wide blocking finding is produced and the
+    /// remaining target-dependent rules are <b>skipped</b>: composing destination paths under a
+    /// target that cannot be used, or asking what a target's file system implies, would describe a
+    /// migration that cannot happen anyway. The source findings already produced are kept.
+    /// </para>
+    /// <para>
+    /// When the target <i>is</i> usable, each capability that stayed unknown produces at most one
+    /// target-wide informational finding, so the user learns which checks could not be carried out
+    /// without being shown one finding per source entry.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<Finding> Evaluate(SourceScanResult source, TargetProbeResult target)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+
+        var findings = new List<Finding>();
+
+        // Source-only rules. These describe the source itself, so they apply regardless of whether
+        // the target can be used.
+        findings.AddRange(SourceScanIssueRule.Evaluate(source));
+        findings.AddRange(ReparsePointRule.Evaluate(source));
+
+        if (TargetPathBlockerRule.IsTargetBlocked(target))
+        {
+            findings.AddRange(TargetPathBlockerRule.Evaluate(target));
+
+            return findings;
+        }
+
+        // Target-dependent rules, only meaningful for a target that can be used as a directory.
+        findings.AddRange(TargetCapabilityCoverageRule.Evaluate(target.Capabilities));
+        findings.AddRange(Fat32MaxFileSizeRule.Evaluate(source, target.Capabilities));
+        findings.AddRange(TargetPathComponentRule.Evaluate(source, target.Capabilities));
+        findings.AddRange(TraditionalPathLengthRule.Evaluate(source, target.TargetDirectoryPath));
+        findings.AddRange(TargetFreeSpaceRule.Evaluate(source, target.Capabilities));
+
+        return findings;
+    }
+}
