@@ -4,6 +4,15 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!--
+      Part of the v0.1 offering, so it carries the release version rather than the SDK default. The
+      constant lives in CopyPreflight.App's project file as well; there is deliberately no
+      Directory.Build.props and no versioning framework for two product assemblies.
+    -->
+    <Version>0.1.0</Version>
+    <!-- Kept in step with CopyPreflight.App, which explains why: one release must not report two
+         different product versions because it was built from two different checkouts. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

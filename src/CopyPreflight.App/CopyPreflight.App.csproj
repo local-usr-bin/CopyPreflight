@@ -27,4 +27,31 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <!--
+    The v0.1 release identity. One version property is enough: the SDK derives AssemblyVersion,
+    FileVersion and InformationalVersion from it, so the shipped executable reports 0.1.0 wherever
+    Windows asks. The three identity properties below are what the file's Properties sheet shows; they
+    exist so the release does not read as "CopyPreflight.App" with no description.
+
+    The version is a constant of the source tree. Nothing stamps the build number, no versioning
+    package is referenced, and the release does not depend on when or where it was built — the same
+    commit always produces the same version.
+  -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Product>CopyPreflight</Product>
+    <AssemblyTitle>CopyPreflight</AssemblyTitle>
+    <Company>CopyPreflight</Company>
+    <Description>Read-only preflight check for a Windows file migration. It reports what may go wrong; it never copies, moves, deletes, renames or repairs anything.</Description>
+    <!--
+      Without this, the SDK appends the HEAD commit to InformationalVersion, so the product version of
+      a released executable reads "0.1.0+<sha>". For a release artifact that is worse than useless: the
+      revision it names is whichever commit happened to be checked out when the package was built, not
+      the release the package is, and the same release built twice can report two different versions.
+      The package version is therefore exactly 0.1.0; which revision produced a given ZIP is recorded
+      alongside the ZIP instead (see docs/RELEASE.md).
+    -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
 </Project>

@@ -9,6 +9,13 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!--
+      Part of the v0.1 offering, so it carries the release version rather than the SDK default. See
+      CopyPreflight.Core's project file for why this is a plain property and not a shared props file.
+    -->
+    <Version>0.1.0</Version>
+    <!-- Kept in step with CopyPreflight.App, which explains why. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
