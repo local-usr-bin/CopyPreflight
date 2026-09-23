@@ -25,9 +25,13 @@
 | 4 | `EvaluatingRules` | `WindowsPreflightEvaluator.Evaluate(source, target, existingObjects)`（**三参数重载**） |
 
 - 每个阶段开始前先广播该阶段的进度快照，**阶段之间**检查一次取消。
-- **在一个正常走到评估阶段的运行里**，M6 的已存在对象事实总是被取得、评估器总是拿到它；两参数重载不会被悄悄使用
-  （用它会产出 `…CHECK_NOT_PERFORMED` Info，等于把"没查"当成"查过"）。
-  取消或失败的运行在它当时所在的阶段停下，**其后的阶段根本没有执行**，结果里记为 `NotPerformed`——
+- **在一个正常走到评估阶段、且源清单可用的运行里**，M6 的已存在对象事实总是被取得、评估器总是拿到它；
+  两参数重载不会被悄悄使用（用它会产出 `…CHECK_NOT_PERFORMED` Info，等于把"没查"当成"查过"）。
+- **没有源清单时 M6 不执行**：源根不可用 ⇒ 没有可映射到目标的路径，阶段记为 `NotPerformed`，界面显示
+  `Existing-object check: not performed — no source inventory was available to check the destinations
+  against`。空 inventory（源确实为空、且已被完整观察）**不是**没有 inventory：那种情况照常执行 M6 并得到
+  `Complete`。这与 Unknown 不得用默认空值代替是同一条原则。
+- 取消或失败的运行在它当时所在的阶段停下，**其后的阶段根本没有执行**，结果里记为 `NotPerformed`——
   这不违反上面的约定，因为约定说的是"凡是走到评估的这次运行"，而不是"不论什么运行都会评估"。
 - 这条路径上**没有**示例数据、没有替身、没有捷径：四个阶段都是生产实现。
 
@@ -51,6 +55,10 @@
   构造函数据此拒绝自相矛盾的组合（已完成却没有 inventory / 未完成却带 findings / 失败却没有原因 等）。
 - **`Incomplete` ≠ `NotPerformed`**：一次**已开始但未返回**的源观测记 `Incomplete`
   （它确实走过了一部分树，旁边的 "observed so far" 计数与它一致）；从未开始的阶段记 `NotPerformed`。
+- **`NotPerformed` 不只来自"运行在哪里结束"**：一次 `Completed` 的运行也可能带一个未执行的阶段
+  （源根不可用时的 M6）。界面顶部因此按覆盖率而不是"没有中途停下"来决定是否显示 `All stages performed.`
+  （`PreflightCoverage.HasStageNotPerformed`）；有阶段没执行时显示 `Not every stage was performed.`。
+  `Incomplete`（进入了但没覆盖全）**不算**未执行，两者不混——那只是"没看全"，不是"没看"。
 
 ## 3. 输入与请求标识
 

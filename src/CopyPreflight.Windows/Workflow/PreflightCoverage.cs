@@ -90,4 +90,19 @@ public sealed record PreflightCoverage
         || TargetCapabilities != PreflightPhaseCoverage.Complete
         || ExistingObjects != PreflightPhaseCoverage.Complete
         || Rules != PreflightPhaseCoverage.Complete;
+
+    /// <summary>
+    /// Whether any stage of this check was never carried out at all.
+    /// </summary>
+    /// <remarks>
+    /// A stage can be left undone in a run that finished — most visibly when an unusable source root
+    /// leaves nothing for the existing-object check to examine — so a finished run is not by itself
+    /// evidence that every stage happened. This is deliberately narrower than <see cref="HasGaps"/>:
+    /// a stage that ran and could not observe everything was still performed, and saying otherwise
+    /// would understate what the check did reach.
+    /// </remarks>
+    public bool HasStageNotPerformed => SourceScan == PreflightPhaseCoverage.NotPerformed
+        || TargetCapabilities == PreflightPhaseCoverage.NotPerformed
+        || ExistingObjects == PreflightPhaseCoverage.NotPerformed
+        || Rules == PreflightPhaseCoverage.NotPerformed;
 }

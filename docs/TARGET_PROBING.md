@@ -346,6 +346,10 @@ M6 在**同一个 Windows 层**新增了一个只读探测器 `WindowsTargetExis
 ### 13.6 覆盖与取消
 
 - `TargetExistingObjectProbeOutcome`：`NotPerformed` / `Completed` / `CompletedWithCoverageGaps` / `Cancelled`。
+- **没有源 inventory 时本层不会被调用**：源根不可用 ⇒ 没有可映射到目标的路径 ⇒ 编排层直接记录
+  `NotPerformed` 并把该事实交给规则层，**不**把空的 entry 列表当作"已知为空的 inventory"传进来。
+  一个**确实为空**、且已被完整观察的源目录照常调用本层并得到 `Completed`——"没东西可查"与"没查"
+  是两件事，绝不用默认空值互相代替。`Probe` 只对**已知的**源清单作答，这是它前置条件的一部分。
 - 批量结果必须能区分"未执行 / 完成且完整覆盖 / 完成但有缺口 / 已取消"。
   **空结果集 ≠ 检查完整**；**取消的项永不默认成 Missing**；M6 的覆盖 ≠ M2 的完整枚举。
 - `Completed` 的确切含义是：**本轮需要评估的位置都已经有了结论**——包括"某条分支被普通文件结构性阻断"

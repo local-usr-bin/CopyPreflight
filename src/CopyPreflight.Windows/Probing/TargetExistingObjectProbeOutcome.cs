@@ -11,8 +11,9 @@ namespace CopyPreflight.Windows;
 /// <list type="bullet">
 /// <item>
 /// <description>
-/// <see cref="NotPerformed"/> means no check was supplied at all. It must never be read as a clean
-/// result, and the rule layer states the gap in the report so that it cannot be.
+/// <see cref="NotPerformed"/> means no check was carried out: none was supplied, or the caller had no
+/// source inventory to check the destinations against and deliberately did not ask. It must never be
+/// read as a clean result, and the rule layer states the gap in the report so that it cannot be.
 /// </description>
 /// </item>
 /// <item>

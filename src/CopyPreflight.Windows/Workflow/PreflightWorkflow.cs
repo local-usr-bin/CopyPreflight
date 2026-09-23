@@ -33,7 +33,10 @@ namespace CopyPreflight.Windows;
 /// <para>
 /// <b>A stage that found nothing is not the same as a stage that never ran.</b> The result states
 /// each stage's coverage independently, and a partial source scan or an unknown target capability is
-/// carried through as a gap instead of being rounded off.
+/// carried through as a gap instead of being rounded off. Nor is a stage that had nothing to work
+/// with the same as one that worked through a known-empty set: a source tree that really is empty is
+/// a checkable inventory, while a source root that could not be used leaves no inventory at all, and
+/// the two must not collapse into one coverage word.
 /// </para>
 /// <para>
 /// <b>Threading is decided here, once.</b> The scanner and both probes are synchronous, and the rule
@@ -196,10 +199,16 @@ public sealed class PreflightWorkflow
             Report(progress, request, phase, sourceObservation.Latest);
             cancellationToken.ThrowIfCancellationRequested();
 
-            // The existing-object facts are always obtained, and the evaluator is always given them.
-            // A run that skipped this stage would report a coverage gap in place of a check, which is
-            // not the same thing as a check that found nothing.
-            existingObjects = _existingObjectProbe.Probe(sourceScan, target, cancellationToken);
+            // The destinations are checked against an inventory, and only against an inventory. A root
+            // that could not be used is not an empty one: it produced no inventory at all, so there is
+            // nothing to map onto a destination and nothing to examine. Handing the probe the empty
+            // entry list anyway would answer "every one of the zero mapped locations was examined" —
+            // a check that found nothing, which is precisely what an absent inventory must never turn
+            // into. The stage is therefore recorded as not performed, with the reason stated beside it,
+            // and the evaluator is given that fact rather than a silence.
+            existingObjects = sourceScan.HasUsableSourceRoot
+                ? _existingObjectProbe.Probe(sourceScan, target, cancellationToken)
+                : TargetExistingObjectProbeResult.NotPerformed();
 
             phase = PreflightRunPhase.EvaluatingRules;
             Report(progress, request, phase, sourceObservation.Latest);

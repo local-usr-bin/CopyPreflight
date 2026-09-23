@@ -291,7 +291,7 @@ CheckViewModel（状态机 + 文案 + FindingRow[]）→ MainWindow（只绑定�
 | 1.5 编排 | `PreflightRequest` / `PreflightRequestError` | 两个路径**原样保留**（不 trim、不规范化）；只做"非空 + 完全限定路径"检查；携带 `RequestId` |
 | 1.5 编排 | `PreflightWorkflow` | 同步内核 + 一次 `Task.Run` 跳转；阶段顺序固定；阶段之间 `ThrowIfCancellationRequested`；取消与异常都返回结果，不抛 faulted task |
 | 1.5 编排 | `PreflightRunPhase` / `PreflightRunProgress` | 阶段枚举与进度快照；快照携带 `RequestId`，因此迟到/跨运行的快照不会污染新运行 |
-| 1.5 编排 | `PreflightRunStatus` / `PreflightPhaseCoverage` / `PreflightCoverage` | 运行状态、单阶段覆盖度、整体覆盖度。`HasGaps` 可单独查询 |
+| 1.5 编排 | `PreflightRunStatus` / `PreflightPhaseCoverage` / `PreflightCoverage` | 运行状态、单阶段覆盖度、整体覆盖度。`HasGaps`（有缺口）与 `HasStageNotPerformed`（有阶段根本没执行）可分别查询 |
 | 1.5 编排 | `PreflightRunFailure` / `PreflightRunResult` | 失败原因与最终结果；构造函数拒绝自相矛盾的组合 |
 | 1.5 呈现 | `CheckViewModel` / `CheckState` / `PreflightText` / `FindingRow` | 状态机、文案与结果行；**不含任何 WPF 类型**，可在没有窗口的情况下测试 |
 | 1.5 呈现 | `CoalescingProgress` | 进入界面队列前的进度合并：只保留最新快照，任何时刻队列里最多一个回调 |
@@ -303,8 +303,12 @@ CheckViewModel（状态机 + 文案 + FindingRow[]）→ MainWindow（只绑定�
   （Completed / Cancelled / Failed）、每个阶段实际覆盖到了什么、以及 findings；构造函数据此拒绝
   "已完成但没有 inventory""未完成却带 findings""失败却没有原因"等自相矛盾的组合。
   `CheckViewModel` 同样分开呈现，但**没有任何属性**把三者合成一句话。
-- **未经执行的阶段不会被当成"干净"**：漏做 M6（两参数重载）仍然只产出
+- **未经执行的阶段不会被当成"干净"**：漏做 M6 仍然只产出
   `…CHECK_NOT_PERFORMED`（Info），覆盖率显示为 `NotPerformed`。
+- **"没有 inventory" ≠ "inventory 为空"**：源根不可用时编排层**不执行** M6（没有可映射到目标的路径），
+  覆盖率记 `NotPerformed` 并说明原因；而一个**确实为空**的源目录是被完整观察过的 inventory，
+  M6 照常执行并得到 `Complete`。界面顶部的 `All stages performed.` 因此由覆盖率派生
+  （`HasStageNotPerformed`），而不是由"运行没有中途停下"派生。
 - **"已开始但未返回" ≠ "从未执行"**：一次中断的源观测覆盖率记为 `Incomplete`（不是 `NotPerformed`），
   因为它确实走过了一部分树，并且旁边的"observed so far"计数与它一致。`Incomplete` 只说明**这一阶段被进入过、
   没有产出清单**，它本身**不**证明其中任何对象被观察到——那些计数是"看到过什么"，不是"有什么"。

@@ -196,6 +196,14 @@ public sealed class WindowsTargetExistingObjectProbe
     /// or whose branch was stopped by an ancestor is reported as unexamined rather than answered. A
     /// query that did not answer leaves its location unknown and is never recorded as absent, because a
     /// check that failed is not evidence about what is there.
+    /// <para>
+    /// <b>The inventory is required to be one.</b> This probe examines a known set of source objects,
+    /// so it is only ever asked about a source that was observed. A source root that could not be used
+    /// produces no inventory rather than an empty one, and a caller holding that outcome must record
+    /// the stage as not performed instead of asking here: the answer it would return — "every one of
+    /// the zero mapped locations was examined" — would be a clean result about a source nobody looked
+    /// at. A source tree that really is empty is the opposite case, and is checked normally.
+    /// </para>
     /// </remarks>
     public TargetExistingObjectProbeResult Probe(
         SourceScanResult source,

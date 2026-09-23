@@ -657,7 +657,7 @@ public sealed class CheckViewModel : INotifyPropertyChanged
         HasFailure = result.Failure is not null;
         PhaseText = result.StoppedInPhase is { } stopped
             ? $"Stopped during: {PreflightText.DescribePhase(stopped)}"
-            : "All stages performed.";
+            : PreflightText.DescribeStageCompletion(result.Coverage);
 
         Findings = FindingRow.FromFindings(result.Findings);
         SelectedFinding = null;
@@ -750,7 +750,7 @@ public sealed class CheckViewModel : INotifyPropertyChanged
         ExistingObjectCoverageText = PreflightText.DescribeCoverage(
             "Existing-object check",
             result.Coverage.ExistingObjects,
-            DescribeExistingObjectGap(result.ExistingObjects));
+            DescribeExistingObjectGap(result));
 
         RulesCoverageText = PreflightText.DescribeCoverage("Findings", result.Coverage.Rules);
     }
@@ -808,11 +808,24 @@ public sealed class CheckViewModel : INotifyPropertyChanged
     }
 
     /// <summary>How much of the mapped destinations the existing-object check left unexamined.</summary>
-    private static string? DescribeExistingObjectGap(TargetExistingObjectProbeResult? existingObjects)
+    /// <remarks>
+    /// A stage that was not carried out says so and says why, because the two reasons are different
+    /// situations: no check was supplied at all, and there was no source inventory for a check to work
+    /// from. Either way nothing is claimed about any destination — in particular, a stage that never
+    /// ran must never be shown as a check that finished.
+    /// </remarks>
+    private static string? DescribeExistingObjectGap(PreflightRunResult result)
     {
-        if (existingObjects is null)
+        if (result.ExistingObjects is not { } existingObjects)
         {
             return null;
+        }
+
+        if (existingObjects.Outcome == TargetExistingObjectProbeOutcome.NotPerformed)
+        {
+            return result.SourceScan is { HasUsableSourceRoot: false }
+                ? "no source inventory was available to check the destinations against"
+                : null;
         }
 
         if (existingObjects.Outcome == TargetExistingObjectProbeOutcome.Cancelled)

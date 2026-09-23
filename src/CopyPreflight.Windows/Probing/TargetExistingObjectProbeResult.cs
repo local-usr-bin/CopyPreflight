@@ -112,14 +112,21 @@ public sealed class TargetExistingObjectProbeResult
     public bool IsComplete => Outcome == TargetExistingObjectProbeOutcome.Completed;
 
     /// <summary>
-    /// The result of a check that was never carried out.
+    /// The result of a check that was not carried out.
     /// </summary>
     /// <returns>
     /// A result with no observations and
     /// <see cref="TargetExistingObjectProbeOutcome.NotPerformed"/>. It exists so that "no check was
-    /// supplied" is an explicit fact the evaluator can report, rather than a silence that could be
+    /// carried out" is an explicit fact the evaluator can report, rather than a silence that could be
     /// mistaken for a clean result.
     /// </returns>
+    /// <remarks>
+    /// It covers both reasons a check is not carried out: no check was supplied at all, and the caller
+    /// had nothing to check — a source root that could not be used leaves no inventory, so no
+    /// destination is mapped and there is no question to ask. A known-empty inventory is a different
+    /// matter and is checked normally: it maps onto no destination either, but the answer it produces
+    /// rests on a source that was actually observed.
+    /// </remarks>
     public static TargetExistingObjectProbeResult NotPerformed()
         => new(
             TargetRootObservation.NotAttempted(

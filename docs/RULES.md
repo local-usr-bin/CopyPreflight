@@ -36,6 +36,8 @@ public sealed class WindowsPreflightEvaluator
 - 两参数重载等价于 `existingObjects: null`。**`null` 不是"目标上什么都没有"**，而是"没有做过这项检查"，
   因此会产出一条 `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED`（Info，见 §4.12）。省略检查绝不能
   与"检查通过、目标干净"混为一谈——这正是 M6 引入三参数重载的原因。
+  **编排层在没有源 inventory 时也走同一条**：源根不可用时不调用 M6，直接把 `NotPerformed` 交给评估器，
+  于是这条 Info 说的是"没有可核对的源清单"，而不是"没有检查被提供"。
 - **纯计算、同步、无状态**：不进行任何文件系统 I/O，不重新扫描源，不重新探测目标，
   不检查 `target\relative-path` 是否存在，不修改任何东西。同一实例可重复使用。
   目标上已有什么，是**由完成观测的一方作为事实传进来**的（`TargetExistingObjectProbeResult`）。
@@ -360,6 +362,11 @@ M4 的 `\\?\` 判断（§4.6）只作用于**传统 `MAX_PATH` 兼容性**这一
   位置上产出一条 Error，而**不**是让整条分支无声通过（另外两种阻断本身就会产生覆盖汇总）。
   **该祖先不需要在 inventory 里恰好有一条目录 entry**：源里某个 entry 的祖先必然是目录，
   规则层据此判定该位置的映射；否则"只列了目录里面的对象"就会把冲突漏掉。
+- **"没有 inventory" ≠ "inventory 为空"**：源根不可用时 M6 **不被执行**（没有可映射到目标的路径），
+  覆盖率记 `NotPerformed`，产出的仍是同一条 `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED`（Info），
+  但文本说明"没有源清单可核对"，并**不**声称目的地干净。相反，一个**确实为空、且已被完整观察**的源目录
+  是已知的 inventory，M6 照常执行并得到 `Completed`。把两者合并，就等于用默认空值代替 Unknown——
+  本仓库禁止这样做。
 - **目标根**：根是普通文件 → 与"目标无效"语义一致（blocking，见 §4.2）；根是 reparse point →
   一条 target-wide Warning 并停止；根检查失败 → **不**为所有子项重复报告。
 - 只有**部分**位置被检查 → 一条 `TARGET_EXISTING_OBJECT_COVERAGE_INCOMPLETE`，说明被遗漏的**数量与原因**，

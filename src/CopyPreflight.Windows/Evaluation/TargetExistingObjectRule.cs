@@ -37,6 +37,12 @@ namespace CopyPreflight.Windows;
 /// failed parent check is described once, at its cause, and the objects behind it are covered by a
 /// single target-wide coverage finding rather than by one informational finding each.
 /// </para>
+/// <para>
+/// A check that was not carried out is stated as well, because a report that simply lacked one would
+/// be indistinguishable from a report whose destinations were all clear. The two ways that happens —
+/// no check was supplied, and there was no source inventory to check the destinations against — are
+/// described as the different situations they are.
+/// </para>
 /// </remarks>
 internal static class TargetExistingObjectRule
 {
@@ -44,11 +50,16 @@ internal static class TargetExistingObjectRule
         SourceScanResult source,
         TargetExistingObjectProbeResult? existingObjects)
     {
-        // A check that was never supplied is a gap, not a result. It is stated explicitly so that a
-        // report produced without one can never be read as "no collisions were found".
+        // A check that was not carried out is a gap, not a result. It is stated explicitly so that a
+        // report produced without one can never be read as "no collisions were found", and it states
+        // the reason that applies: a run that supplied no check at all, and a run that had no source
+        // inventory to check the destinations against, are different situations and are described as
+        // the different things they are.
         if (existingObjects is null || existingObjects.Outcome == TargetExistingObjectProbeOutcome.NotPerformed)
         {
-            yield return CreateNotPerformedFinding();
+            yield return source.HasUsableSourceRoot
+                ? CreateNotPerformedFinding()
+                : CreateNotPerformedForAnAbsentInventoryFinding();
 
             yield break;
         }
@@ -293,6 +304,30 @@ internal static class TargetExistingObjectRule
             + "occupy any of them.",
             "Carry out the existing-object check before relying on this report, or treat every "
             + "destination as one that still has to be examined.");
+
+    /// <summary>
+    /// The same gap, for a run that had no source inventory at all: there was nothing to map onto a
+    /// destination, so no destination was ever in scope to be examined.
+    /// </summary>
+    /// <remarks>
+    /// It carries the same code and severity as the other case, because it is the same coverage fact
+    /// and the same hole in the report. What it adds is the reason. Telling the reader to carry out
+    /// the check is advice they cannot act on when what is missing is the inventory, and it would
+    /// suggest the destinations were passed over rather than that no question was ever attached to
+    /// them.
+    /// </remarks>
+    private static Finding CreateNotPerformedForAnAbsentInventoryFinding()
+        => new(
+            WindowsPreflightFindingCodes.TargetExistingObjectCheckNotPerformed,
+            Severity.Info,
+            "Existing objects at the destinations were not checked",
+            "There was no source inventory for this run, so no destination was mapped and nothing about "
+            + "destination collisions was examined. This is not a report of a clean result.",
+            "No source object was observed, so there was nothing to compare the destinations with. "
+            + "Whether an object already occupies any of them is unknown, and the absence of a "
+            + "destination collision finding says only that no question was asked about one.",
+            "Make the source folder readable and run the preflight check again. Until the source can be "
+            + "observed there is no inventory to check the destinations against.");
 
     private static Finding CreateTargetRootReparsePointFinding(TargetRootObservation targetRoot)
         => new(

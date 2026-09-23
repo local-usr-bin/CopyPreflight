@@ -72,6 +72,12 @@ internal static class PreflightText
     /// <summary>Shown when a check finished but part of its scope was never observed.</summary>
     internal const string CoverageGaps = "Assessment ended with coverage gaps.";
 
+    /// <summary>Shown when every stage of a finished check was carried out.</summary>
+    internal const string AllStagesPerformed = "All stages performed.";
+
+    /// <summary>Shown when a check finished with a stage it never carried out.</summary>
+    internal const string NotEveryStagePerformed = "Not every stage was performed.";
+
     /// <summary>Shown for a run that was cancelled and therefore assessed nothing.</summary>
     internal const string NotAnAssessment = "No assessment was produced.";
 
@@ -169,6 +175,19 @@ internal static class PreflightText
         CheckState.Failed => "The check failed to run to completion.",
         _ => "Ready. Nothing has been checked yet.",
     };
+
+    /// <summary>
+    /// Whether every stage of a finished check was carried out, as it is displayed.
+    /// </summary>
+    /// <remarks>
+    /// A run that reached its end is not by itself a run that carried out every stage: an unusable
+    /// source root leaves the existing-object check with nothing to examine, and the run still
+    /// finishes. It is derived from the coverage rather than from the run having stopped nowhere, so
+    /// that the two cannot drift apart. A stage that ran and could not cover everything is a different
+    /// statement from a stage that did not run, and is not counted here.
+    /// </remarks>
+    internal static string DescribeStageCompletion(PreflightCoverage coverage)
+        => coverage.HasStageNotPerformed ? NotEveryStagePerformed : AllStagesPerformed;
 
     /// <summary>
     /// What one stage of a check covered, as it is displayed.

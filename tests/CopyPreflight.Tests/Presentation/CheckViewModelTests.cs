@@ -325,6 +325,62 @@ public class CheckViewModelTests
     }
 
     [Fact]
+    public async Task StartCheckAsync_WhenTheSourceRootIsUnusable_DoesNotClaimEveryStageWasPerformed()
+    {
+        // The run finishes, but the existing-object stage never happened: a root that could not be used
+        // leaves no inventory to check the destinations against. A finished run must not be presented as
+        // one that carried out every stage, and the stage that did not run must not read as complete.
+        using var source = new TemporarySourceTree();
+        using var target = new TemporarySourceTree();
+
+        var viewModel = WorkflowInputs.ViewModelOver(new PreflightWorkflow());
+        viewModel.SourcePath = source.PathOf("no-inventory-here");
+        viewModel.TargetPath = target.Root;
+
+        await viewModel.StartCheckAsync();
+
+        Assert.Equal(CheckState.Completed, viewModel.State);
+        Assert.Equal("Assessment finished.", viewModel.StateText);
+        Assert.Equal(PreflightText.NotEveryStagePerformed, viewModel.PhaseText);
+
+        // The stage says what it did and why, so the absent inventory is visible on the screen rather
+        // than only in the finding list.
+        Assert.Contains("Existing-object check: not performed", viewModel.ExistingObjectCoverageText);
+        Assert.Contains("no source inventory", viewModel.ExistingObjectCoverageText);
+        Assert.DoesNotContain("complete", viewModel.ExistingObjectCoverageText);
+
+        // The blocking conclusion is the source root's, and the frozen statement stays withheld.
+        Assert.Contains("blocking issue", viewModel.ConclusionText);
+        Assert.False(viewModel.HasBlockingStatement);
+        Assert.Equal(
+            Severity.Error,
+            viewModel.Findings
+                .Single(finding => finding.Code == WindowsPreflightFindingCodes.SourceRootUnusable.Value)
+                .Severity);
+    }
+
+    [Fact]
+    public async Task StartCheckAsync_WhenTheSourceIsAnEmptyDirectory_ShowsEveryStagePerformed()
+    {
+        // The contrast that has to survive: a source tree that really is empty is a known inventory, so
+        // the destinations were checked against it and the run did carry out every stage. Zero entries
+        // because nothing was there is not the same fact as zero entries because nobody looked.
+        using var source = new TemporarySourceTree();
+        using var target = new TemporarySourceTree();
+
+        var viewModel = WorkflowInputs.ViewModelOver(new PreflightWorkflow());
+        viewModel.SourcePath = source.Root;
+        viewModel.TargetPath = target.Root;
+
+        await viewModel.StartCheckAsync();
+
+        Assert.Equal(CheckState.Completed, viewModel.State);
+        Assert.Equal(PreflightText.AllStagesPerformed, viewModel.PhaseText);
+        Assert.Equal("Existing-object check: complete", viewModel.ExistingObjectCoverageText);
+        Assert.True(viewModel.HasBlockingStatement);
+    }
+
+    [Fact]
     public async Task StartCheckAsync_WhenTheCheckLeftGaps_SaysSoEvenWithNoBlockingIssue()
     {
         using var source = new TemporarySourceTree();
@@ -725,13 +781,23 @@ public class CheckViewModelTests
         Assert.DoesNotContain("Exception", viewModel.SourceCoverageText);
         Assert.DoesNotContain("Exception", viewModel.ConclusionText);
 
-        Assert.Single(viewModel.Findings);
+        // The screen reports the blocking conclusion about the root, and beside it the coverage fact
+        // that with no inventory there was nothing to check the destinations against. Neither is an
+        // application failure, and neither carries the internal type that produced the refusal.
+        Assert.Equal(
+            ["SOURCE_ROOT_UNUSABLE", "TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED"],
+            viewModel.Findings.Select(finding => finding.Code));
 
         var row = viewModel.Findings[0];
         Assert.Equal("SOURCE_ROOT_UNUSABLE", row.Code);
         Assert.Equal("Error", row.SeverityLabel);
         Assert.Equal("Source-wide (not tied to a single source entry)", row.SourcePathText);
         Assert.DoesNotContain("Exception", row.Explanation);
+
+        var coverageGap = viewModel.Findings[1];
+        Assert.Equal("Info", coverageGap.SeverityLabel);
+        Assert.Contains("no source inventory", coverageGap.Explanation);
+        Assert.DoesNotContain("Exception", coverageGap.Explanation);
 
         // A count that was never observed stays "not observed": a zero would state that the folder was
         // read and turned out to be empty, which is the opposite of what happened.

@@ -215,5 +215,78 @@ public class PreflightWorkflowSourceRootTests
         Assert.DoesNotContain("TARGET_SPACE_MAY_BE_INSUFFICIENT", codes);
         Assert.DoesNotContain("TARGET_EXISTING_FILE_COLLISION", codes);
         Assert.DoesNotContain("TARGET_EXISTING_OBJECT_COVERAGE_INCOMPLETE", codes);
+
+        // The one finding that is not a statement about source contents: the coverage fact that, with
+        // no inventory, there was nothing to check the destinations against. It concludes nothing about
+        // what the destinations hold — it says no question was asked.
+        Assert.Contains("TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED", codes);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenThereIsNoInventory_TheDestinationsAreNotReportedAsChecked()
+    {
+        // A root that could not be used produces no inventory, and an absent inventory is not an empty
+        // one. With nothing to map onto a destination there is no existing-object check to carry out, so
+        // the stage is reported as not performed rather than as a check that got through zero locations.
+        using var source = new TemporarySourceTree();
+        using var target = new TemporarySourceTree();
+
+        var result = await new PreflightWorkflow().RunAsync(
+            WorkflowInputs.Request(source.PathOf("no-inventory-here"), target.Root));
+
+        Assert.Equal(PreflightRunStatus.Completed, result.Status);
+        Assert.Equal(PreflightPhaseCoverage.Incomplete, result.Coverage.SourceScan);
+
+        // Not performed — never complete, and never inferred from the empty entry list.
+        Assert.Equal(PreflightPhaseCoverage.NotPerformed, result.Coverage.ExistingObjects);
+        Assert.True(result.Coverage.HasStageNotPerformed);
+
+        var existingObjects = Assert.IsType<TargetExistingObjectProbeResult>(result.ExistingObjects);
+        Assert.Equal(TargetExistingObjectProbeOutcome.NotPerformed, existingObjects.Outcome);
+        Assert.Empty(existingObjects.Observations);
+
+        // The blocking conclusion about the root is kept, and the gap beside it is stated rather than
+        // left as a silence the destinations could be read as clear out of.
+        Assert.Equal(Severity.Error, result.Findings.Only(WindowsPreflightFindingCodes.SourceRootUnusable).Severity);
+
+        var coverage = Assert.Single(
+            result.Findings.WithCode(WindowsPreflightFindingCodes.TargetExistingObjectCheckNotPerformed));
+
+        Assert.Equal(Severity.Info, coverage.Severity);
+        Assert.Contains("no source inventory", coverage.Explanation, StringComparison.Ordinal);
+
+        // The target capability stage does not depend on the inventory and still ran.
+        Assert.Equal(PreflightPhaseCoverage.Complete, result.Coverage.TargetCapabilities);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheSourceIsAnEmptyDirectory_ItsKnownEmptyInventoryIsStillChecked()
+    {
+        // The contrast that must never collapse: a source tree that really is empty is a known
+        // inventory, and the destinations are checked against it normally. Zero entries because nothing
+        // was there is a different fact from zero entries because nobody looked.
+        using var source = new TemporarySourceTree();
+        using var target = new TemporarySourceTree();
+
+        var result = await new PreflightWorkflow().RunAsync(
+            WorkflowInputs.Request(source.Root, target.Root));
+
+        var scan = Assert.IsType<SourceScanResult>(result.SourceScan);
+
+        Assert.True(scan.HasUsableSourceRoot);
+        Assert.True(scan.IsComplete);
+        Assert.Empty(scan.Entries);
+
+        // The check ran, and covered everything it had to cover — there is nothing to leave uncovered.
+        Assert.Equal(PreflightPhaseCoverage.Complete, result.Coverage.ExistingObjects);
+        Assert.False(result.Coverage.HasStageNotPerformed);
+
+        var existingObjects = Assert.IsType<TargetExistingObjectProbeResult>(result.ExistingObjects);
+        Assert.Equal(TargetExistingObjectProbeOutcome.Completed, existingObjects.Outcome);
+        Assert.Empty(existingObjects.Observations);
+
+        // Nothing was not-performed here, and nothing blocking was found either.
+        Assert.Empty(result.Findings.WithCode(WindowsPreflightFindingCodes.TargetExistingObjectCheckNotPerformed));
+        Assert.DoesNotContain(result.Findings, finding => finding.Severity == Severity.Error);
     }
 }

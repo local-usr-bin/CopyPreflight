@@ -91,11 +91,14 @@ public sealed class WindowsPreflightEvaluator
     /// </para>
     /// <para>
     /// A source root that could not be used is reported by the source-only rules and is <b>not</b> a
-    /// reason to stop: the target-side stages still establish whatever they can about the destination,
-    /// exactly as they do for a rejected target, and each fact is stated for what it is. What is
-    /// withheld is any conclusion that would need the source inventory, because there is none — the
-    /// source-dependent rules receive an empty entry list and therefore produce nothing, rather than
-    /// being fed fabricated entries or skipped silently.
+    /// reason to stop: the target capability stage still establishes whatever it can about the
+    /// destination, exactly as it does for a rejected target, and each fact is stated for what it is.
+    /// What is withheld is any conclusion that would need the source inventory, because there is none
+    /// — the source-dependent rules receive no entries and therefore produce nothing, rather than
+    /// being fed fabricated entries or skipped silently. An absent inventory is never presented as an
+    /// empty one either: with nothing to map onto a destination there is no existing-object check to
+    /// report, and that rule states the gap together with the reason it happened, so the destinations
+    /// are not read as a set that was examined and found clear.
     /// </para>
     /// <para>
     /// If the target is itself rejected as a destination (Windows refused the path, or no usable
