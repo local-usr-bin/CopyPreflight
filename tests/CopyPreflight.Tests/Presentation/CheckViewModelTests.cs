@@ -700,6 +700,60 @@ public class CheckViewModelTests
         Assert.False(viewModel.TryBlockClose());
     }
 
+    // ------------------------------------------------------------------ a source root that cannot be used
+
+    [Fact]
+    public async Task StartCheckAsync_WhenTheSourceRootDoesNotExist_ShowsASourceErrorInsteadOfAFailure()
+    {
+        using var source = new TemporarySourceTree();
+        using var target = new TemporarySourceTree();
+
+        var missingRoot = source.PathOf("does-not-exist");
+
+        var viewModel = WorkflowInputs.ViewModelOver(WorkflowInputs.Over());
+        viewModel.SourcePath = missingRoot;
+        viewModel.TargetPath = target.Root;
+
+        await viewModel.StartCheckAsync();
+
+        // A folder that is not there is an expected outcome of the input: the screen reports a finished
+        // assessment with a blocking finding rather than a check that broke.
+        Assert.Equal(CheckState.Completed, viewModel.State);
+        Assert.False(viewModel.HasFailure);
+        Assert.Empty(viewModel.FailureText);
+        Assert.DoesNotContain("Exception", viewModel.StateText);
+        Assert.DoesNotContain("Exception", viewModel.SourceCoverageText);
+        Assert.DoesNotContain("Exception", viewModel.ConclusionText);
+
+        Assert.Single(viewModel.Findings);
+
+        var row = viewModel.Findings[0];
+        Assert.Equal("SOURCE_ROOT_UNUSABLE", row.Code);
+        Assert.Equal("Error", row.SeverityLabel);
+        Assert.Equal("Source-wide (not tied to a single source entry)", row.SourcePathText);
+        Assert.DoesNotContain("Exception", row.Explanation);
+
+        // A count that was never observed stays "not observed": a zero would state that the folder was
+        // read and turned out to be empty, which is the opposite of what happened.
+        Assert.Contains("not observed", viewModel.FilesText);
+        Assert.DoesNotContain(": 0", viewModel.FilesText);
+        Assert.Contains("source root could not be used", viewModel.CountsNote);
+
+        // The coverage note says the observation was attempted and established nothing.
+        Assert.Contains("incomplete", viewModel.SourceCoverageText);
+        Assert.Contains("source root could not be used", viewModel.SourceCoverageText);
+
+        // The strongest statement the product has is not available here: a blocking issue was found, so
+        // the frozen sentence may not appear in any form.
+        Assert.False(viewModel.HasBlockingStatement);
+        Assert.Empty(viewModel.BlockingStatementText);
+        Assert.DoesNotContain(PreflightText.NoKnownBlockingIssue, viewModel.ConclusionText);
+        Assert.Contains("1 blocking issue", viewModel.ConclusionText);
+
+        // Nothing was created to make the missing folder appear.
+        Assert.False(Directory.Exists(missingRoot));
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /// <summary>

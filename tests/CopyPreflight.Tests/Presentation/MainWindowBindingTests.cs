@@ -191,6 +191,190 @@ public class MainWindowBindingTests
             });
         });
 
+    // ------------------------------------------------------------------ the folder dialogs
+
+    [Fact]
+    public void BrowsingABox_IsConfiguredFromThatBoxAloneAndWritesThatBoxAlone()
+        => OnDispatchedThread(() =>
+        {
+            using var source = new TemporarySourceTree();
+            using var target = new TemporarySourceTree();
+
+            // A real conflict, so the finished run has something in the list to leave alone.
+            source.CreateFile("a.txt", 3);
+            target.CreateFile("a.txt", 7);
+
+            var viewModel = new CheckViewModel(WorkflowInputs.Over());
+            var picks = new List<FolderPicker>();
+            string? answer = null;
+
+            WithShownWindow(viewModel, window =>
+            {
+                // The dialog itself is modal and cannot be driven here, so the answer is supplied and
+                // everything around it — the configuration, and what is written back — is real.
+                window.PickFolder = picker =>
+                {
+                    picks.Add(picker);
+                    return answer;
+                };
+
+                var browse = FindButtons(window, "Browse…");
+                Assert.Equal(2, browse.Count);
+
+                var start = FindButton(window, "Start check");
+
+                // The case this fixes: both boxes empty, and the source browsed first.
+                Assert.Equal(string.Empty, viewModel.SourcePath);
+                Assert.Equal(string.Empty, viewModel.TargetPath);
+
+                answer = source.Root;
+                browse[0].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, browse[0]));
+
+                Assert.Equal(source.Root, viewModel.SourcePath);
+                Assert.Equal(string.Empty, viewModel.TargetPath);
+
+                // An empty box offers no starting folder; the dialog's own remembered location decides.
+                var sourcePicker = picks[0];
+                Assert.Null(sourcePicker.InitialDirectory);
+
+                // Browsing for the target must not start inside the source folder that was just chosen,
+                // and must not inherit it in any form. The identity is what makes the two dialogs keep
+                // separate histories in the first place.
+                answer = target.Root;
+                browse[1].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, browse[1]));
+
+                var targetPicker = picks[1];
+                Assert.Null(targetPicker.InitialDirectory);
+                Assert.NotEqual(sourcePicker.DialogId, targetPicker.DialogId);
+                Assert.Equal(target.Root, viewModel.TargetPath);
+                Assert.Equal(source.Root, viewModel.SourcePath);
+
+                // From then on each side starts where its own box points, never where the other one does.
+                // Each click is given its own box's answer, so the write-back that follows cannot mask a
+                // starting folder borrowed from the other side.
+                answer = target.Root;
+                browse[1].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, browse[1]));
+                Assert.Equal(target.Root, picks[2].InitialDirectory);
+                Assert.NotEqual(source.Root, picks[2].InitialDirectory);
+                Assert.Equal(source.Root, viewModel.SourcePath);
+
+                answer = source.Root;
+                browse[0].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, browse[0]));
+                Assert.Equal(source.Root, picks[3].InitialDirectory);
+                Assert.NotEqual(target.Root, picks[3].InitialDirectory);
+                Assert.Equal(target.Root, viewModel.TargetPath);
+
+                // A finished check, so there is a result and a detail selection to leave alone.
+                var settled = WhenSettled(viewModel);
+                start.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, start));
+                PumpUntil(settled);
+                Settle(window);
+
+                Assert.Equal(CheckState.Completed, viewModel.State);
+                Assert.NotEmpty(viewModel.Findings);
+
+                var grid = Find<DataGrid>(window);
+                var detail = FindBoundTo<ScrollViewer>(window, UIElement.VisibilityProperty, "HasSelection");
+
+                grid.SelectedIndex = 0;
+                Settle(window);
+
+                var selected = viewModel.SelectedFinding;
+                var findings = viewModel.Findings;
+
+                Assert.NotNull(selected);
+                Assert.Equal(Visibility.Visible, detail.Visibility);
+
+                // Cancelling changes nothing at all: not the paths, not the result, not the selection.
+                answer = null;
+                browse[0].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, browse[0]));
+                browse[1].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, browse[1]));
+
+                Assert.Equal(source.Root, viewModel.SourcePath);
+                Assert.Equal(target.Root, viewModel.TargetPath);
+                Assert.Equal(CheckState.Completed, viewModel.State);
+                Assert.Same(findings, viewModel.Findings);
+                Assert.Same(selected, viewModel.SelectedFinding);
+                Assert.Equal(Visibility.Visible, detail.Visibility);
+                Assert.True(viewModel.HasBlockingStatement);
+            });
+        });
+
+    // ------------------------------------------------------------------ the findings list's columns
+
+    [Fact]
+    public void TheFindingsList_GivesTheTitleColumnTheSpaceItNeeds()
+        => OnDispatchedThread(() =>
+        {
+            using var source = new TemporarySourceTree();
+            using var target = new TemporarySourceTree();
+
+            source.CreateFile("dup.txt", 4);
+            target.CreateFile("dup.txt", 4);
+
+            var viewModel = new CheckViewModel(WorkflowInputs.Over());
+            viewModel.SourcePath = source.Root;
+            viewModel.TargetPath = target.Root;
+
+            WithShownWindow(viewModel, window =>
+            {
+                var grid = Find<DataGrid>(window);
+                var settled = WhenSettled(viewModel);
+                var start = FindButton(window, "Start check");
+
+                start.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, start));
+                PumpUntil(settled);
+                Settle(window);
+
+                Assert.Equal(Visibility.Visible, grid.Visibility);
+                Assert.NotEmpty(viewModel.Findings);
+
+                // Nothing about the list itself changed: same four columns, same order, one row per
+                // finding, no finding dropped.
+                Assert.Equal(
+                    new[] { "Severity", "Code", "Title", "Path" },
+                    grid.Columns.Select(column => column.Header as string));
+                Assert.Equal(viewModel.Findings.Count, grid.Items.Count);
+
+                var severity = grid.Columns[0];
+                var code = grid.Columns[1];
+                var title = grid.Columns[2];
+                var path = grid.Columns[3];
+
+                // Severity only has to hold Error, Warning and Info, and stays compact.
+                Assert.Equal(DataGridLengthUnitType.Pixel, severity.Width.UnitType);
+                Assert.InRange(severity.Width.Value, 60, 100);
+                Assert.True(severity.MinWidth > 0, "The severity column must keep a readable floor.");
+
+                // The code is still shown as it always was, but it no longer takes the space a title
+                // needs.
+                Assert.Equal(DataGridLengthUnitType.Pixel, code.Width.UnitType);
+                Assert.InRange(code.Width.Value, 120, 260);
+                Assert.True(code.MinWidth > 0, "The code column must keep a readable floor.");
+
+                // The title takes whatever is left, which is where a long title is actually read.
+                Assert.Equal(DataGridLengthUnitType.Star, title.Width.UnitType);
+                Assert.True(title.MinWidth >= 180, "The title column needs a readable floor.");
+
+                // The path keeps enough room to recognise the object it names.
+                Assert.Equal(DataGridLengthUnitType.Pixel, path.Width.UnitType);
+                Assert.InRange(path.Width.Value, 120, 260);
+                Assert.True(path.MinWidth > 0, "The path column must keep a readable floor.");
+
+                // The user can still make each column the width that suits them.
+                Assert.True(grid.CanUserResizeColumns, "The columns must stay resizable by the user.");
+
+                // And the result on screen is the one that was asked for: at the window's own size the
+                // title column is the widest of the three text columns.
+                Assert.True(
+                    title.ActualWidth > code.ActualWidth,
+                    $"The title column ({title.ActualWidth}) should be wider than the code column ({code.ActualWidth}).");
+                Assert.True(
+                    title.ActualWidth > path.ActualWidth,
+                    $"The title column ({title.ActualWidth}) should be wider than the path column ({path.ActualWidth}).");
+            });
+        });
+
     // ------------------------------------------------------------------ the dispatcher thread
 
     /// <summary>Runs a body on a fresh STA thread whose dispatcher it installs as the context.</summary>
@@ -321,6 +505,12 @@ public class MainWindowBindingTests
 
         return match!;
     }
+
+    /// <summary>Every button whose content is the given label, in the order the tree holds them.</summary>
+    private static IReadOnlyList<Button> FindButtons(DependencyObject root, string content)
+        => [.. Descendants(root)
+            .OfType<Button>()
+            .Where(button => string.Equals(button.Content as string, content, StringComparison.Ordinal))];
 
     private static T Find<T>(DependencyObject root)
         where T : DependencyObject

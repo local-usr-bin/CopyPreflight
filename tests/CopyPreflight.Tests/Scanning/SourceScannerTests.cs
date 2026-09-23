@@ -189,6 +189,10 @@ public class SourceScannerTests
 
         Assert.Equal(InvalidSourceRootReason.NotFound, exception.Reason);
         Assert.Equal(missing, exception.SourceRoot);
+
+        // The rejection is decided on the resolved path, so a caller can report the location that was
+        // actually refused without resolving it a second time.
+        Assert.Equal(Path.GetFullPath(missing), exception.ResolvedSourceRoot);
     }
 
     [Fact]
@@ -201,6 +205,7 @@ public class SourceScannerTests
 
         Assert.Equal(InvalidSourceRootReason.NotADirectory, exception.Reason);
         Assert.Equal(file, exception.SourceRoot);
+        Assert.Equal(Path.GetFullPath(file), exception.ResolvedSourceRoot);
     }
 
     [Theory]

@@ -174,8 +174,20 @@
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling"
                       Visibility="{Binding HasFindings, Converter={StaticResource BoolToVisibility}}">
+                <!--
+                    The column widths are a presentation decision and nothing else: the four columns, the
+                    order they are in, the one-row-per-finding rule and the ordering of the rows are all
+                    unchanged. Severity only has to hold Error, Warning and Info, and it stays compact;
+                    Code and Path are wide enough to recognise what a row is about without letting the
+                    technical code take the space a title needs; and Title takes whatever is left, so a
+                    long title is readable at the default window size instead of being reduced to its
+                    first words. The fixed columns keep the user's ability to drag them wider or
+                    narrower. Code and Path can be narrower than their longest possible content, so they
+                    trim with an ellipsis rather than being clipped mid-character — the full text of
+                    both is in the detail pane, which wraps it and lets it be selected.
+                -->
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="Severity" Binding="{Binding SeverityLabel}" Width="80">
+                    <DataGridTextColumn Header="Severity" Binding="{Binding SeverityLabel}" Width="88" MinWidth="72">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
                                 <Setter Property="FontWeight" Value="SemiBold" />
@@ -193,9 +205,21 @@
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="300" />
-                    <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" />
-                    <DataGridTextColumn Header="Path" Binding="{Binding SourcePathText}" Width="280" />
+                    <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="200" MinWidth="120">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" MinWidth="200" />
+                    <DataGridTextColumn Header="Path" Binding="{Binding SourcePathText}" Width="190" MinWidth="120">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
                 </DataGrid.Columns>
             </DataGrid>
 

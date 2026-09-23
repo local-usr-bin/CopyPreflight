@@ -100,6 +100,43 @@ public class SourceScanResultTests
     }
 
     [Theory]
+    [InlineData(InvalidSourceRootReason.NotFound)]
+    [InlineData(InvalidSourceRootReason.NotADirectory)]
+    public void ARefusedRootIsAnOutcomeOfItsOwnAndNeverAnInventory(InvalidSourceRootReason reason)
+    {
+        // Nothing was traversed, so nothing was observed. The zeroes are therefore not observations,
+        // and the result says so rather than looking like an empty tree that was read successfully.
+        var result = SourceScanResult.ForUnusableRoot(
+            new InvalidSourceRootException(@"C:\Data", Path.GetFullPath(@"C:\Data"), reason));
+
+        Assert.Equal(Path.GetFullPath(@"C:\Data"), result.SourceRoot);
+        Assert.Equal(reason, result.UnusableRootReason);
+        Assert.False(result.HasUsableSourceRoot);
+        Assert.False(result.IsComplete);
+        Assert.Empty(result.Entries);
+        Assert.Empty(result.Issues);
+
+        // An empty tree that really was observed is complete and has a usable root; the two are not
+        // the same result.
+        Assert.True(new SourceScanResult(@"C:\Data", [], []).HasUsableSourceRoot);
+    }
+
+    [Fact]
+    public void AUsableRootCarriesNoRootFailure()
+    {
+        var result = new SourceScanResult(@"C:\Data", MixedEntries, []);
+
+        Assert.Null(result.UnusableRootReason);
+        Assert.True(result.HasUsableSourceRoot);
+    }
+
+    [Fact]
+    public void ForUnusableRootRejectsAMissingFailure()
+    {
+        Assert.Throws<ArgumentNullException>(() => SourceScanResult.ForUnusableRoot(null!));
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData(" ")]

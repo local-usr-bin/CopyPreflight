@@ -4,6 +4,8 @@
 > 以及在观察不到时如何诚实报告。
 > 它不改变 [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md) 的产品范围，只把扫描这一层的语义写清楚。
 > 状态：**M2 已冻结**。M7 只在 §7 追加了一条进度**报告频率**的补充（不改变观察语义）。
+> **M8 追加了 §6.2**：把"根在遍历开始前就被拒绝"表达成一个**自己的结果**（而不是一个空清单），
+> 并因此收紧 `IsComplete` 的定义。观察语义、错误策略、统计恒等式与 reparse 边界**一律未变**。
 
 ## 1. 职责
 
@@ -34,6 +36,14 @@
 | 本身是 reparse point | 视为用户明确指定的根，照常枚举；不对它做特殊处理 |
 
 先检查取消令牌，再校验 source root：预先取消的令牌会先抛 `OperationCanceledException`。
+
+两个 `InvalidSourceRootException` 都是**输入的可预期结果**，不是程序缺陷，因此异常对象携带足够信息让调用方
+**如实报告**而无需重做判断：`SourceRoot`（调用方原样传入的字符串）、`ResolvedSourceRoot`（判定所用的
+**已解析绝对路径**，即"本来会被遍历的那个路径"）与 `Reason`。调用方不必（也不应）自己再解析一次路径，
+更**不应**用 `Directory.Exists(...) == false` 之类的二次判断去推断原因——该 API 在权限不足、路径过长等
+其他错误下同样会返回 `false`，用它当统一判据会把"不可访问"说成"不存在"。
+
+**"根本不可用"的正式表达是 `SourceScanResult.ForUnusableRoot(exception)`，不是"一个空的清单"**，见 §6.2。
 
 ### 2.1 relative path 语义
 
@@ -114,8 +124,32 @@ reparse point 单独计数而不并入文件 / 目录，正是为了让上面第
 - 已成功观察到的内容不会因为后续失败而丢弃。
 - **取消不是 issue**：取消必须抛 `OperationCanceledException`，不得被转换成 partial result。
 
-`SourceScanResult.IsComplete` 等价于"没有任何 issue"，即"每个到达的目录都列得出来、
-列表里每个对象的基础 metadata 都读得到"。它**不代表**文件内容可读，也不代表复制会成功。
+`SourceScanResult.IsComplete` 等价于"没有任何 issue **且根是可用的**"，即"根没有被拒绝，
+每个到达的目录都列得出来、列表里每个对象的基础 metadata 都读得到"。它**不代表**文件内容可读，
+也不代表复制会成功。根不可用的结果**永远是** `false`——它一条 issue 也没有，却什么都没观察到（§6.2）。
+
+### 6.2 源根不可用：不是 issue，是自己的结果
+
+扫描器在遍历开始前拒绝根时（§2 的两条 `InvalidSourceRootException`），**不返回**一个"空清单的
+partial result"。空的 `Entries` + 空的 `Issues` 看起来与"一棵真的被读过的空目录"完全一样，
+把两者混为一谈就是伪造事实。替代表达是：
+
+```csharp
+SourceScanResult.ForUnusableRoot(InvalidSourceRootException)   // 根的拒绝被如实承载
+    .UnusableRootReason   // NotFound / NotADirectory，或 null（根可用时）
+    .HasUsableSourceRoot  // 等价于 UnusableRootReason is null
+```
+
+- 它**只**承载已经确定的事实：`SourceRoot` 取 `ResolvedSourceRoot`（扫描器本来会遍历的绝对路径），
+  没有 entry、没有 issue、计数全为零——但 `HasUsableSourceRoot == false` 与 `IsComplete == false`
+  明确说明这些零**不是观测**。它**不**重新解析路径、**不**探测文件系统、**不**创建那个缺失的目录。
+- **根不可用 ≠ 枚举失败**：枚举失败（§6.1）意味着根在那里、只是列不出来，那**是**一个
+  `CannotEnumerateDirectory` issue，根本身仍然可用（`HasUsableSourceRoot == true`），
+  只是 `IsComplete == false`。反之，根不可用时**根本没有枚举发生**，因此不会产生任何枚举 issue。
+- 因此"目录不存在"与"目录存在但读不了"是两件不同的事，各有各的表达，**不得互相转写**。
+- `ForUnusableRoot(null)` → `ArgumentNullException`。
+- 判定"这对一次迁移意味着什么"仍然**不属于**扫描器：把 `UnusableRootReason` 变成用户可见的
+  Error finding 是规则层的事（见 [`RULES.md`](RULES.md) §4.13）。
 
 ## 7. 进度
 

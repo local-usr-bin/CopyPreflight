@@ -674,6 +674,19 @@ public sealed class CheckViewModel : INotifyPropertyChanged
     {
         if (result.SourceScan is { } scan)
         {
+            if (!scan.HasUsableSourceRoot)
+            {
+                // A root that could not be used is not an empty inventory. Its counters are zero
+                // because nothing was looked at, and showing a zero would state the opposite — a
+                // source tree that genuinely holds no files yields one. The reason is stated here and
+                // the finding for it is in the list.
+                ShowCountsNotObserved();
+                CountsNote = "The source root could not be used, so nothing in the source was observed. "
+                    + "The findings below state why.";
+
+                return;
+            }
+
             ShowObservedCounts(
                 scan.FileCount,
                 scan.DirectoryCount,
@@ -745,6 +758,14 @@ public sealed class CheckViewModel : INotifyPropertyChanged
     /// <summary>Why the source was not observed in full, from the issues the scan recorded.</summary>
     private static string? DescribeSourceGap(PreflightRunResult result)
     {
+        // A root that could not be used is not a partial observation: nothing was observed at all,
+        // and saying "N observation failures were recorded" would report a zero where the real fact
+        // is that the tree was never looked at.
+        if (result.SourceScan is { HasUsableSourceRoot: false })
+        {
+            return "the source root could not be used, so nothing in the source was observed";
+        }
+
         if (result.SourceScan is { IsComplete: false } scan)
         {
             return $"{scan.Issues.Count} observation failure(s) were recorded";

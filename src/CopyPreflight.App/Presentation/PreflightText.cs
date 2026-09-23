@@ -78,6 +78,43 @@ internal static class PreflightText
     /// <summary>How a finding that belongs to no single source object is labelled.</summary>
     internal const string TargetWide = "Target-wide (not tied to a single source object)";
 
+    /// <summary>
+    /// How a finding that belongs to the source as a whole — its root, or the observation of it — is
+    /// labelled.
+    /// </summary>
+    /// <remarks>
+    /// A source-wide finding is not a target-wide one. The source root is not an entry, so a finding
+    /// about the root itself carries no path; labelling that as a target problem would point the
+    /// reader at the wrong half of the check.
+    /// </remarks>
+    internal const string SourceWide = "Source-wide (not tied to a single source entry)";
+
+    /// <summary>
+    /// What the path column of a finding says: the entry it applies to, or an explicit statement of
+    /// what it belongs to instead.
+    /// </summary>
+    /// <param name="code">Stable identity of the rule that produced the finding.</param>
+    /// <param name="sourceRelativePath">The source entry the finding applies to, or <see langword="null"/>.</param>
+    /// <remarks>
+    /// Which side a pathless finding belongs to is decided by the rule that produced it, never guessed
+    /// from the absence of a path: a finding about the source root and a finding about the target both
+    /// carry no path, and saying "target" for the first would be wrong about what was observed.
+    /// </remarks>
+    internal static string DescribeFindingPath(string code, string? sourceRelativePath)
+        => sourceRelativePath ?? (IsSourceWide(code) ? SourceWide : TargetWide);
+
+    /// <summary>
+    /// Whether a finding that carries no path comes from the source side rather than the target side.
+    /// </summary>
+    /// <remarks>
+    /// Both source rules that can report without a path do so only for the source root itself, which is
+    /// not an entry: the root could not be used at all, or the root could not be listed. Every other
+    /// pathless finding is a statement about the target.
+    /// </remarks>
+    private static bool IsSourceWide(string code)
+        => code == WindowsPreflightFindingCodes.SourceRootUnusable.Value
+            || code == WindowsPreflightFindingCodes.SourceDirectoryEnumerationFailed.Value;
+
     /// <summary>The label for a fact that was never observed because the stage never ran.</summary>
     internal const string NotChecked = "Not checked";
 

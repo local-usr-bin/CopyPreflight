@@ -13,9 +13,9 @@ namespace CopyPreflight.App;
 /// rule behind it is identifiable.
 /// </para>
 /// <para>
-/// A finding that belongs to no single source object — a target-wide or scan-wide conclusion — is
-/// labelled as such. Inventing a path for it, or leaving the column blank so that it reads like a
-/// missing value, would both misrepresent it.
+/// A finding that belongs to no single source object — a target-wide conclusion, or one about the
+/// source root itself — is labelled with what it belongs to instead. Inventing a path for it, or
+/// leaving the column blank so that it reads like a missing value, would both misrepresent it.
 /// </para>
 /// </remarks>
 public sealed record FindingRow
@@ -34,7 +34,7 @@ public sealed record FindingRow
         Code = code;
         Title = title;
         SourceRelativePath = sourceRelativePath;
-        SourcePathText = sourceRelativePath ?? PreflightText.TargetWide;
+        SourcePathText = PreflightText.DescribeFindingPath(code, sourceRelativePath);
         Explanation = explanation;
         Impact = impact;
         Recommendation = recommendation;

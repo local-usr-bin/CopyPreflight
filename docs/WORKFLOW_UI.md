@@ -5,10 +5,12 @@
 > 以及把它接到窗口上的**最小呈现层**（`src/CopyPreflight.App/Presentation/` + `MainWindow`）。
 > 它不改变任何既有规则、Finding 文本或 Severity 语义，也不改变
 > [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md) 的产品范围。
-> 状态：**M7 已实现并独立提交，等待验收**。
+> 状态：**M7 已实现、已独立提交并已验收通过**（`84b3af3`）。
 > 2026-09-22 验收反馈核实了三件事——界面绑定接线、进度投递的合并、取消识别与终态发布边界——
 > 其中两处修正（`IsFindingsEmpty` 的通知、`OperationCanceledException` 的过滤条件）见本文 §4、§10.1，
-> 以独立 corrective commit 提交；M7 仍未最终验收。
+> 以独立 corrective commit 提交。
+> **M8（手工验收修正与界面可读性）追加 §11**：两个浏览对话框的状态互相独立、源根不可用按 source-side
+> Error 报告、findings 表格列宽只是呈现。它**不新增任何检测能力**，也不改变 M1–M7 的任何契约。
 
 ## 1. 编排层回答什么
 
@@ -125,8 +127,10 @@
 - 排序稳定为 **Error → Warning → Info**，且**不依赖 enum 的数值顺序**（显式排序键）。
 - 详情面板显示**选中的** finding 的 Explanation / Impact / Recommendation；
   完整路径放在**只读但可选中复制**的文本框中（不因长路径被截断而不能复制）。
-- **目标级 finding**（`SourceRelativePath == null`，如 `TARGET_PATH_UNAVAILABLE`）显式标注为
-  "Target-wide (not tied to a single source object)"，**绝不**伪造一个源路径。
+- **无 relative path 的 finding 按归属标注，绝不互相冒用**：目标级（如 `TARGET_PATH_UNAVAILABLE`）标注为
+  "Target-wide (not tied to a single source object)"；源自身的问题（`SOURCE_ROOT_UNUSABLE`、
+  `SOURCE_DIRECTORY_ENUMERATION_FAILED`）标注为 "Source-wide (not tied to a single source entry)"。
+  两者都**绝不**伪造一个相对路径。
 - 不做合并、丢弃或重新分级：一条 finding 一行。
 - 结论区：只有 `Completed` 且 Error 计数为 0 时才显示冻结语句
   `"No known blocking issue was detected."`；`Cancelled` / `Failed` / 运行中 / 未检查各显示各自的文本。
@@ -178,7 +182,67 @@ dotnet run --project src/CopyPreflight.App
 - 测试夹具一律创建在仓库自己的 `artifacts/test-fixtures` 下，只操作这些测试自己拥有的资源；
   **不使用**真实用户目录，也不回退到系统临时目录。
 
-## 11. 相关文档
+## 11. M8 追加：手工验收修正与界面可读性
+
+M8 **不是**新的检测能力里程碑。它只修三件在 M7 人工验收中被观察到的事，并做最小的界面可读性调整；
+不新增任何规则、不新增导出 / 安装器 / 本地化。
+
+### 11.1 两个浏览对话框互相独立（问题 A）
+
+- 症状：两个框都为空时先浏览 source、再浏览 target，target 对话框会打开在刚选中的 source 目录里。
+- **明确否决**的做法："target 为空就用 source 的父目录 / 从 source 推导 target"——那会让一个框的用途去
+  决定另一个框的位置。source 浏览与 target 浏览是两个**互相独立**的用途。
+- 采用的机制（都用 `Microsoft.Win32.OpenFolderDialog` 自带的能力，**不自建**历史 / 注册表 / JSON 路径记录）：
+  - **`ClientGuid`**：source 与 target 各用一个**源码里固定的、互不相同**的 GUID 常量
+    （`FolderPicker.SourceDialogId` / `TargetDialogId`）。Windows 以标识为键分别记忆"对话框尺寸 + 上次使用的文件夹"，
+    因此两个框各有一份**独立**历史，谁也不能把对方拖到自己没去过的目录。
+    标识是**常量**而非每次运行随机生成：随机标识不携带任何历史，而共用一个标识正是被替换掉的耦合；
+    一旦发布**不得更换**（换了就等于静默丢弃用户已经习惯的位置）。
+  - **`InitialDirectory`**：只有当**本框自己**已经持有完全限定路径时才设置；否则不设置，
+    交由对话框自己记忆的位置，再退回到平台默认（**不**冻结"此电脑 / 桌面 / 某个盘"）。
+- **浏览起点 ≠ 自动选择**：浏览**开始**不改动任何输入框；只有用户在对话框里确认后，才写回**本框自己**。
+  取消对话框不写回任何东西（路径、已有结论、findings、详情选中项全部保持原样）。
+- 呈现层**不做文件系统存在性判断**：起点只按 `Path.IsPathFullyQualified` 判断是否可用
+  （与请求自身的输入规则一致）；对话框遇到用不了的路径时保持它自己记忆的位置。
+- **没有**新增业务规则：用户仍可以让 source 与 target 相同或嵌套。
+- 决策逻辑被抽成可测的 `FolderPicker`（标识 / 标题 / 起点），窗口只负责设置属性并写回答案；
+  `MainWindow.PickFolder` 是一个可替换的细接缝，使"哪个框、允许从哪开始、取消不改动"能在
+  **不驱动模态对话框**的前提下被断言。
+
+### 11.2 源根不可用不再伪装成程序崩溃（问题 B）
+
+- 症状：源指向一个不存在的目录时，界面显示 "The check failed to run to completion." 连同原始
+  `CopyPreflight.Core.InvalidSourceRootException ...`，并伴随"源观测：未执行 / 目标能力：未执行"。
+- 新行为：源根不可用是**输入的可预期结果**，按 **source-side Error** 报告，而不是应用程序失败。
+  实现**复用**既有的"源事实 → 规则层定 Severity → finding"链路，**不绕过**规则系统：
+  `PreflightWorkflow.Run` 只捕获**那一个**前置失败，把它转成 `SourceScanResult.ForUnusableRoot`，
+  再由新增的 source-only 规则 `SOURCE_ROOT_UNUSABLE`（**Error**）翻译成 finding——
+  见 [`RULES.md`](RULES.md) §4.13 与 [`SCANNER.md`](SCANNER.md) §6.2。
+- **可预期的源侧条件 vs 真正的程序缺陷**：
+  - 只有 `InvalidSourceRootException`（根不存在 / 根不是目录）走这条路，运行状态仍是 **`Completed`**。
+  - 其他任何异常（含"带着本轮 token 却从未被请求取消"的 `OperationCanceledException`）**仍然**让运行进入
+    **`Failed`**——没有 `catch (Exception)` 把所有异常都吞成 finding。
+- **绝不**因为一次拒绝而：显示 `"No known blocking issue was detected."`、伪造完整源清单、用 `0` 填 Unknown、
+  发起新的文件系统 I/O、自动创建源目录、自动改写路径。
+- **绝不**出现 `InvalidSourceRootException` / `DirectoryNotFoundException` / 堆栈 / 命名空间 / 内部类型名；
+  用户可见文本只在观测支持时才说 "source directory does not exist" / "source path is not a directory"。
+- **不以** `Directory.Exists(source) == false` 当统一判据（该 API 在权限不足等错误下同样返回 `false`）；
+  权限 / 枚举失败保持它本来的类别（`SOURCE_DIRECTORY_ENUMERATION_FAILED`，Error）与 `Unknown` 边界，
+  **不**被改写成"不存在"。
+- 源根不可用时**仍然**取得目标能力与目标已存在对象事实（与"目标被拒绝"时的处理一致），
+  但所有依赖源清单的规则拿到**空 entry 列表**、因此**什么也不产出**（不是被跳过，也不是被塞进伪造条目）。
+- 界面据此把"从未观测"与"观测到 0"分开：计数区显示 "not observed" 而不是 `: 0`，并说明源根不可用。
+
+### 11.3 findings 表格的列宽（问题 C）
+
+- 只用标准 `DataGrid` 尺寸机制（固定像素 + `MinWidth` + `Star` + 用户可拖动），**没有**主题 / 图标 / 配色框架。
+- `Severity` 紧凑（`88` / `MinWidth 72`），`Code` 保持可见但不再霸占空间（`200` / `MinWidth 120`，过长用省略号），
+  `Title` 取剩余宽度（`Star` / `MinWidth 200`，默认最宽），`Path` 保留可辨认空间（`190` / `MinWidth 120`，过长用省略号）。
+- 列集合、顺序、一条 finding 一行、Severity 稳定排序、UI 虚拟化、详情面板与 `GridSplitter` **都没有变**；
+  不隐藏任何 finding，也不为了宽度去改 Finding 的 Title / Code。
+- 不要求像素级精确：正常窗口宽度与收窄后都应可读。这是**呈现**调整，不是检测语义。
+
+## 12. 相关文档
 
 - 职责边界与依赖方向：[`ARCHITECTURE.md`](ARCHITECTURE.md) §1.5、§3、§4.7
 - 产品范围与冻结原则：[`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)

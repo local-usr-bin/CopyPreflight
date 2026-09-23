@@ -88,7 +88,10 @@ public sealed class SourceScanner
     /// <returns>The inventory and the recoverable failures recorded while building it.</returns>
     /// <exception cref="ArgumentException"><paramref name="sourceRoot"/> is null, empty or whitespace.</exception>
     /// <exception cref="InvalidSourceRootException">
-    /// Nothing exists at <paramref name="sourceRoot"/>, or it exists but is not a directory.
+    /// Nothing exists at <paramref name="sourceRoot"/>, or it exists but is not a directory. The
+    /// exception carries the resolved path and the reason, so a caller can report the rejection as a
+    /// structured source-side fact rather than as an application failure; see
+    /// <see cref="SourceScanResult.ForUnusableRoot"/>.
     /// </exception>
     /// <exception cref="OperationCanceledException">
     /// The scan was cancelled. Cancellation is never reported as a scan issue, and no partial result
@@ -119,6 +122,7 @@ public sealed class SourceScanner
         {
             throw new InvalidSourceRootException(
                 sourceRoot,
+                fullSourceRoot,
                 File.Exists(fullSourceRoot)
                     ? InvalidSourceRootReason.NotADirectory
                     : InvalidSourceRootReason.NotFound);

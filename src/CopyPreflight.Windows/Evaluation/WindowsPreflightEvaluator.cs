@@ -80,13 +80,22 @@ public sealed class WindowsPreflightEvaluator
     /// </exception>
     /// <remarks>
     /// <para>
-    /// Source-only rules — the scan failures, the reparse point warning and the Windows naming rules
-    /// — always run, because they describe facts about the source that remain true whatever the
-    /// target turns out to be. The naming rules belong here rather than with the target-dependent
-    /// rules because they consume no target capability and compose no destination path: whether a
-    /// name contains an illegal character, stands for a reserved device or ends with a space is a
-    /// property of the observed name, judged against ordinary Windows naming semantics. Losing those
-    /// findings because the target happened to be unusable would hide known problems in the source.
+    /// Source-only rules — the unusable source root, the scan failures, the reparse point warning and
+    /// the Windows naming rules — always run, because they describe facts about the source that remain
+    /// true whatever the target turns out to be. The naming rules belong here rather than with the
+    /// target-dependent rules because they consume no target capability and compose no destination
+    /// path: whether a name contains an illegal character, stands for a reserved device or ends with a
+    /// space is a property of the observed name, judged against ordinary Windows naming semantics.
+    /// Losing those findings because the target happened to be unusable would hide known problems in
+    /// the source.
+    /// </para>
+    /// <para>
+    /// A source root that could not be used is reported by the source-only rules and is <b>not</b> a
+    /// reason to stop: the target-side stages still establish whatever they can about the destination,
+    /// exactly as they do for a rejected target, and each fact is stated for what it is. What is
+    /// withheld is any conclusion that would need the source inventory, because there is none — the
+    /// source-dependent rules receive an empty entry list and therefore produce nothing, rather than
+    /// being fed fabricated entries or skipped silently.
     /// </para>
     /// <para>
     /// If the target is itself rejected as a destination (Windows refused the path, or no usable
@@ -117,6 +126,7 @@ public sealed class WindowsPreflightEvaluator
 
         // Source-only rules. These describe the source itself, so they apply regardless of whether
         // the target can be used.
+        findings.AddRange(SourceRootUnusableRule.Evaluate(source));
         findings.AddRange(SourceScanIssueRule.Evaluate(source));
         findings.AddRange(ReparsePointRule.Evaluate(source));
         findings.AddRange(WindowsNameCompatibilityRule.Evaluate(source));

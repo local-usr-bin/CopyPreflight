@@ -11,6 +11,7 @@ public class WindowsPreflightFindingCodesTests
 {
     private static readonly string[] ExpectedCodes =
     [
+        "SOURCE_ROOT_UNUSABLE",
         "SOURCE_DIRECTORY_ENUMERATION_FAILED",
         "SOURCE_ENTRY_METADATA_FAILED",
         "TARGET_PATH_INVALID",
@@ -98,6 +99,12 @@ public class WindowsPreflightFindingCodesTests
     /// </summary>
     private static IEnumerable<IReadOnlyList<Finding>> EvaluateEveryScenario()
     {
+        // A source root that could not be used at all is established before anything else can be: it is
+        // the one source-side condition that leaves no inventory to reason about.
+        yield return PreflightInputs.Evaluate(
+            PreflightInputs.UnusableRootSource(),
+            PreflightInputs.HealthyTarget());
+
         yield return PreflightInputs.Evaluate(
             PreflightInputs.Source(),
             PreflightInputs.BlockedTarget(TargetProbeIssueKind.TargetPathInvalid));

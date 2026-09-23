@@ -25,6 +25,20 @@ internal static class PreflightInputs
         params SourceEntry[] entries)
         => new(@"C:\source", entries, issues);
 
+    /// <summary>
+    /// The observation outcome of a source root the scanner refused before it started: no entries and
+    /// no issues, but the reason the root could not be used.
+    /// </summary>
+    /// <remarks>
+    /// Built through the production factory rather than by hand, so a rule test reasons about exactly
+    /// the fact the workflow hands the rule layer.
+    /// </remarks>
+    internal static SourceScanResult UnusableRootSource(
+        InvalidSourceRootReason reason = InvalidSourceRootReason.NotFound,
+        string sourceRoot = @"C:\source")
+        => SourceScanResult.ForUnusableRoot(
+            new InvalidSourceRootException(sourceRoot, Path.GetFullPath(sourceRoot), reason));
+
     internal static SourceScanIssue Issue(
         SourceScanIssueKind kind,
         string? relativePath,

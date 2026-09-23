@@ -128,10 +128,16 @@ public sealed class PreflightWorkflow
     /// <remarks>
     /// <para>
     /// A source root that cannot be used at all — nothing is there, or it is not a directory — is a
-    /// predictable outcome rather than a crash, and is reported as a failed run carrying the reason.
-    /// It is deliberately <b>not</b> turned into a fabricated scan result: the scanner's contract keeps
-    /// a precondition failure apart from a recoverable issue, and inventing an inventory the scanner
-    /// never produced is exactly the kind of fact this tool must not manufacture.
+    /// predictable outcome of the input rather than an unexpected failure, and the run reports it as
+    /// the source-side fact it is: the scanner's own reason, recorded through
+    /// <see cref="SourceScanResult.ForUnusableRoot"/>, which the rule layer turns into a structured
+    /// blocking finding. It is deliberately <b>not</b> turned into a fabricated scan result: nothing
+    /// was traversed, so the result carries no entry and no issue, and its counters state nothing.
+    /// </para>
+    /// <para>
+    /// Only that precondition failure is handled this way. Anything else a stage throws — including a
+    /// cancellation-shaped exception that is not this run's — still stops the run and is reported as
+    /// the failure it is, so a defect cannot be dressed up as an input fact.
     /// </para>
     /// <para>
     /// A cancellation reported against a different token is not this run's cancellation and is treated
@@ -161,7 +167,25 @@ public sealed class PreflightWorkflow
             phase = PreflightRunPhase.ScanningSource;
             Report(progress, request, phase, sourceObservation.Latest);
             cancellationToken.ThrowIfCancellationRequested();
-            sourceScan = _scanner.Scan(request.SourcePath, sourceObservation, cancellationToken);
+
+            try
+            {
+                sourceScan = _scanner.Scan(request.SourcePath, sourceObservation, cancellationToken);
+            }
+            catch (InvalidSourceRootException unusableRoot)
+            {
+                // A root that is not there, or that is not a directory, is an expected outcome of the
+                // input rather than a defect of the application. It is carried as the source-side fact
+                // it is — the scanner's own reason, for the path the scanner resolved — so that the
+                // rule layer can report it as a structured blocking finding. Nothing is re-observed,
+                // nothing is created and no path is rewritten.
+                //
+                // The run continues, exactly as it does for a target that Windows refuses: what the
+                // target side can establish is still established, and the source-dependent rules
+                // receive no entries and therefore conclude nothing about contents that were never
+                // observed.
+                sourceScan = SourceScanResult.ForUnusableRoot(unusableRoot);
+            }
 
             phase = PreflightRunPhase.ProbingTargetCapabilities;
             Report(progress, request, phase, sourceObservation.Latest);

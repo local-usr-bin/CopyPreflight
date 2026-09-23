@@ -10,11 +10,12 @@ CopyPreflight **不是复制软件**。它不执行复制、不执行移动、�
 
 | 项目 | 状态 |
 | --- | --- |
-| 当前里程碑 | **M7 — Preflight workflow and minimal WPF integration：已实现并提交，等待验收** |
-| 上一个已验收基线 | **M6 — Target existing-object / collision：已验收通过**（`6da3e249`，422 测试通过） |
+| 当前里程碑 | **M8 — Manual-acceptance fixes and UI polish：已实现并提交，等待验收** |
+| 上一个已验收基线 | **M7 — Preflight workflow and minimal WPF integration：已验收通过**（`84b3af372caaa1a3cb2bdcace0fb01ac38d9b6d7`，517 测试通过） |
 | 产品功能 | 只读的源目录扫描已可用（递归 inventory、文件 / 目录 / 逻辑字节统计、扫描 issue、进度、取消、reparse point 安全边界）；目标能力探测已可用，能报告目标文件系统名称、当前用户可用空间与单路径组件长度上限，无法确定的保持 Unknown；**规则层已可用**：源扫描失败与目标不可用会被报告为 Error，可用空间不足与 reparse point 会给出 Warning，FAT32 单文件上限、目标名称组件长度、传统 MAX_PATH 兼容性也已实现，未知目标能力会被说明为 Info；**Windows 命名兼容性规则**：非法名称字符与保留设备名是 Error，结尾空格 / 句点与仅大小写不同的兄弟名称碰撞是 Warning；**目标已存在对象 / 碰撞探测（M6）**：能只读观察每个映射位置当前已有什么，区分已存在对象 / 确证缺失 / 检查失败 / 未查询，并给出对应 findings |
 | 检查编排（M7） | 已可用：按固定顺序调用真实的扫描器、目标能力探测、目标已存在对象探测与规则评估，把**运行状态 / 实际覆盖 / 风险**三个维度分开报告，支持取消、重复运行与阶段级进度 |
 | 用户界面 | **已有可用的最小检查界面**（M7）：源 / 目标输入 + 浏览、开始检查、取消、阶段与已观察计数进度、findings 表格（按 Severity 稳定排序、UI 虚拟化）与详情面板。多源 / 批量、结果导出、历史对比仍未做 |
+| 手工验收修正（M8） | 源 / 目标两个浏览对话框**状态互相独立**（各有自己的对话框标识与历史，起点只来自本框自己的路径，绝不从另一框推断）；源根不存在 / 不是目录时按 **source-side Error** 结构化报告，不再暴露内部异常类型，并与真正的程序失败严格区分；findings 表格列宽做了可读性调整。**未新增任何检测能力** |
 
 M2 加入的真实扫描逻辑**只存在于 Core**。M3 加入的目标能力探测与 Win32 interop、M4–M6 加入的规则评估、
 M6 的已存在对象探测，以及 M7 加入的检查编排，**都在 `CopyPreflight.Windows`**（`net10.0-windows`），
@@ -89,7 +90,9 @@ dotnet test CopyPreflight.sln
 `dotnet build` 会隐式执行 restore，因此最简流程是 `build` → `test`。
 
 手动启动检查界面（用于人工确认窗口可启动并能完成一次检查）：控件级的绑定接线由带真实窗口的
-`MainWindowBindingTests` 核查；拖动分隔条、点击浏览对话框、超大列表滚动手感仍**未**做人工验证：
+`MainWindowBindingTests` 核查；拖动分隔条、点击浏览对话框、超大列表滚动手感仍**未**做人工验证。
+M8 的三项修正（浏览对话框互不串位、源根不可用的 Error 文案、findings 表格列宽）由自动化测试覆盖其
+接线与逻辑，但**最终仍需人工在界面上复核**（见 [`docs/WORKFLOW_UI.md`](docs/WORKFLOW_UI.md) §11）：
 
 ```bash
 dotnet run --project src/CopyPreflight.App

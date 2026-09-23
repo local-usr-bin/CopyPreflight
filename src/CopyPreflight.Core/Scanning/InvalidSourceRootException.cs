@@ -28,21 +28,57 @@ public enum InvalidSourceRootReason
 /// <see cref="SourceScanIssueKind.CannotEnumerateDirectory"/> issue instead, leaving the caller
 /// with an explicit partial result rather than a failure.
 /// </para>
+/// <para>
+/// A rejection is an <b>expected outcome of the input</b>, not a defect of the application, so it is
+/// carried as a fact a caller can report instead of as something it has to hide. The separate
+/// <see cref="Reason"/> is what keeps the two admissible cases apart: a root that is not there and a
+/// root that is not a directory are different facts, and reporting either one as the other would be
+/// a claim the scanner never established.
+/// </para>
 /// </remarks>
 public sealed class InvalidSourceRootException : Exception
 {
     /// <summary>Creates the exception for a source root that cannot be used.</summary>
     /// <param name="sourceRoot">The source root as supplied by the caller.</param>
+    /// <param name="resolvedSourceRoot">
+    /// The path the rejection was decided on, resolved to an absolute path by the same resolution the
+    /// scanner would have used for a root it could walk.
+    /// </param>
     /// <param name="reason">Why the source root was rejected.</param>
-    public InvalidSourceRootException(string sourceRoot, InvalidSourceRootReason reason)
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="sourceRoot"/> or <paramref name="resolvedSourceRoot"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="reason"/> is not a known reason.
+    /// </exception>
+    public InvalidSourceRootException(
+        string sourceRoot,
+        string resolvedSourceRoot,
+        InvalidSourceRootReason reason)
         : base(BuildMessage(sourceRoot, reason))
     {
+        ArgumentNullException.ThrowIfNull(sourceRoot);
+        ArgumentNullException.ThrowIfNull(resolvedSourceRoot);
+
+        if (!Enum.IsDefined(reason))
+        {
+            throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown source root reason.");
+        }
+
         SourceRoot = sourceRoot;
+        ResolvedSourceRoot = resolvedSourceRoot;
         Reason = reason;
     }
 
     /// <summary>The source root exactly as supplied by the caller, before path resolution.</summary>
     public string SourceRoot { get; }
+
+    /// <summary>
+    /// The path the rejection was decided on, resolved to an absolute path. It is the path that would
+    /// have been walked, so a report can name the location that was actually rejected without
+    /// resolving the path a second time.
+    /// </summary>
+    public string ResolvedSourceRoot { get; }
 
     /// <summary>Why the source root was rejected.</summary>
     public InvalidSourceRootReason Reason { get; }

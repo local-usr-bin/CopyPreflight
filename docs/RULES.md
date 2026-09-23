@@ -3,6 +3,8 @@
 > **状态：M4、M5 与 M6 契约已冻结。** 本文件记录规则层当前**实际实现**的规则：它们的输入、Severity、
 > 触发条件、边界，以及为什么某些结论只能是 Warning 或 Info。它不描述产品范围（见
 > [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)），也不描述各层职责（见 [`ARCHITECTURE.md`](ARCHITECTURE.md)）。
+> **M8 只追加了一条"源根本身不可用"的 source-only 规则（§4.13）与它的 FindingCode，并把它插在评估顺序最前（§6）；**
+> 既有规则的触发条件、Severity 与文本**一律未改**。
 
 规则层是唯一把 source facts 与 target capabilities 组合起来判断的地方。M4 是它第一次真正产出
 用户可见的 `Finding`；M5 在其中加入了 Windows 命名兼容性规则，M6 又加入了"目标已存在对象 /
@@ -85,7 +87,7 @@ leaf name 与 parent directory）。它只是字符串切分，**不是**路径�
 | `TargetExistingObjectCheckNotPerformed` | `TARGET_EXISTING_OBJECT_CHECK_NOT_PERFORMED` |
 | `TargetExistingObjectCheckCancelled` | `TARGET_EXISTING_OBJECT_CHECK_CANCELLED` |
 
-这 24 个 code 被测试逐个钉住（`WindowsPreflightFindingCodesTests`），并且有一条测试证明
+这 25 个 code 被测试逐个钉住（`WindowsPreflightFindingCodesTests`），并且有一条测试证明
 **每一个声明出来的 code 都确实会被某条规则产出**。
 
 ## 4. 规则清单
@@ -367,6 +369,36 @@ M4 的 `\\?\` 判断（§4.6）只作用于**传统 `MAX_PATH` 兼容性**这一
   目标大小写敏感性探测、二阶大小写碰撞、reparse 分类 / 解析、ACL / ADS / 时间戳能力分析、
   Unicode 归一化深度、8.3 别名、报告导出、最终 GUI。
 
+### 4.13 源根本身不可用 → Error（M8 追加）
+
+| 源根事实 | FindingCode | Severity |
+| --- | --- | --- |
+| 解析后不存在（`UnusableRootReason = NotFound`） | `SOURCE_ROOT_UNUSABLE` | Error |
+| 解析后存在但不是目录（`UnusableRootReason = NotADirectory`） | `SOURCE_ROOT_UNUSABLE` | Error |
+
+- 输入不是"扫描失败"，而是扫描器**在任何遍历开始之前**就拒绝了根：`SourceScanResult.UnusableRootReason`
+  有值、`HasUsableSourceRoot == false`、没有 entry 也没有 issue（见 [`SCANNER.md`](SCANNER.md) §6.2）。
+  因此本规则**不读**任何新事实，只把这个已经确定的原因翻译成用户可见的 finding。
+- 两个原因**共用一个 code、分开的文本**：`Reason == NotADirectory` 时标题为
+  "Source path is not a directory"，其余为 "Source directory does not exist"。
+  把两者写成同一句，等于对事实做了超出观测的断言——"不存在"与"存在但不是目录"是不同的结论，
+  只有扫描器确定了哪一个，才说哪一个。
+- 两种情形都是 **Error**：根不可用使**所有**依赖 inventory 的规则失去立足点
+  （路径长度、名称兼容性、文件系统上限、目标已有什么，都要描述从未被观察到的内容），
+  这是本次检查能报告的最根本的阻塞。
+- `Finding.SourceRelativePath == null`——根不是 entry，**不给它编造一个相对路径**。
+  呈现层据此把它标为 **source-wide**，而不是 target-wide（见 [`WORKFLOW_UI.md`](WORKFLOW_UI.md) §11）。
+- **不**以 `Directory.Exists(...) == false` 作为统一判据：这与 Microsoft 文档不符——该 API 在权限不足、
+  路径过长或其他错误时同样返回 `false`。本规则只消费 `InvalidSourceRootException.Reason`
+  这个已经由扫描器作出的判定，**不**做第二次文件系统判断，也**不**把权限 / I/O / 设备失败并入"不存在"。
+- **根不可用不是短路条件**：它由 source-only 规则报告，目标侧阶段照常进行（与"目标被拒绝"的处理一致，
+  见 §6）。被**扣住**的是任何需要源清单的结论——它们拿到的是空 entry 列表，因此什么也不产出，
+  而不是被塞进伪造的条目或悄悄跳过。
+- 与 §4.1 的区别：§4.1 说的是"根能列出来，但某个目录 / 某个对象观察失败"（inventory 不完整，
+  `SOURCE_DIRECTORY_ENUMERATION_FAILED`）；本规则说的是"根本没有 inventory"。
+  两者**不会**同时为同一个根产生（根不可用时根本没有枚举发生，见 §6.2 与 `PreflightWorkflowSourceRootTests`）。
+- 内部异常类型（`InvalidSourceRootException`）**绝不**出现在任何用户可见文本里。
+
 ## 5. 为什么这些结论停留在 Warning
 
 ### 5.1 为什么可用空间规则当前只能是 Warning（M4；M6 之后仍然如此）
@@ -408,22 +440,25 @@ M4 的 `\\?\` 判断（§4.6）只作用于**传统 `MAX_PATH` 兼容性**这一
 
 评估顺序（实现固定，**但顺序不是产品契约**，测试不得依赖"某条 finding 排第几"）：
 
-1. `SourceScanIssueRule` —— 源侧，始终执行
-2. `ReparsePointRule` —— 源侧，始终执行
-3. `WindowsNameCompatibilityRule` —— 源侧，始终执行（M5）
-4. `SourceCaseCollisionRule` —— 源侧，始终执行（M5）
-5. `TargetPathBlockerRule` —— 若目标被拒绝，产出 blocking Error 后**立即返回**
-6. `TargetCapabilityCoverageRule` —— 仅目标可用时
-7. `TargetExistingObjectRule` —— 仅目标可用时（M6）
-8. `Fat32MaxFileSizeRule`
-9. `TargetPathComponentRule`
-10. `TraditionalPathLengthRule`
-11. `TargetFreeSpaceRule`
+1. `SourceRootUnusableRule` —— 源侧，始终执行（M8）
+2. `SourceScanIssueRule` —— 源侧，始终执行
+3. `ReparsePointRule` —— 源侧，始终执行
+4. `WindowsNameCompatibilityRule` —— 源侧，始终执行（M5）
+5. `SourceCaseCollisionRule` —— 源侧，始终执行（M5）
+6. `TargetPathBlockerRule` —— 若目标被拒绝，产出 blocking Error 后**立即返回**
+7. `TargetCapabilityCoverageRule` —— 仅目标可用时
+8. `TargetExistingObjectRule` —— 仅目标可用时（M6）
+9. `Fat32MaxFileSizeRule`
+10. `TargetPathComponentRule`
+11. `TraditionalPathLengthRule`
+12. `TargetFreeSpaceRule`
 
 分组依据是"这条规则是否依赖目标"：
 
-- **source-only** 规则（1–4）描述源自身的事实，目标如何都成立，**始终执行**。
-- **target-dependent** 规则（6–11）在目标被拒绝时**全部跳过**：在一个不能作为目标目录的路径下
+- **source-only** 规则（1–5）描述源自身的事实，目标如何都成立，**始终执行**。
+  其中 `SourceRootUnusableRule` 排在最前，因为"根根本不可用"是比"某个目录列不出来"更基本的事实；
+  它对**所有**可用输入都是空操作（`UnusableRootReason == null` 时不产出任何 finding）。
+- **target-dependent** 规则（7–12）在目标被拒绝时**全部跳过**：在一个不能作为目标目录的路径下
   拼目标路径，或推演一个根本不会发生迁移的目标文件系统能力，都是在描述一件不会发生的事。
   M6 的 `TargetExistingObjectRule` 属于这一组，因为它消费的是"目标位置上已有什么"这一目标侧事实。
   当目标本身被拒绝时，已经产出的 blocking finding 已经说明"无法进行任何目标侧检查"，因此
@@ -537,3 +572,11 @@ M4、M5 与 M6 **都没有修改**前几个里程碑的任何模型或契约：
   `TargetExistingObjectProbeResult` 等）全部位于 **Windows 层的 `Probing/`**，
   **没有**进入 `CopyPreflight.Core`，Core 仍然是无 Win32 / 无 I/O 的领域模型。
 - 没有新增第三方依赖，没有新增运行时项目；仍然是 Core / Windows / App / Tests 四个项目。
+
+**M8 与本节的关系。** M8 是手工验收修正，它**首次**最小地改动了 Core 的**扫描侧**契约（不是规则层语义）：
+`InvalidSourceRootException` 带上"已解析路径"，`SourceScanResult` 增加
+`UnusableRootReason` / `HasUsableSourceRoot` 与 `ForUnusableRoot` 工厂，并把
+`IsComplete` 收紧为 `Issues.Count == 0 && HasUsableSourceRoot`。理由与边界见
+[`SCANNER.md`](SCANNER.md) §6.2——**扫描器的观察语义、错误策略、统计恒等式与 reparse 边界都没有变**，
+变的只是"根在遍历开始前就被拒绝"这件事有了自己的表达。规则层这一侧**只是追加**：
+一个 FindingCode 加一条 source-only 规则；M4/M5/M6 的 24 个 code、它们的 Severity 与文本一个都没有动。

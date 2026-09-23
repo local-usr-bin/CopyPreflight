@@ -26,6 +26,12 @@ namespace CopyPreflight.Windows;
 public static class WindowsPreflightFindingCodes
 {
     /// <summary>
+    /// The source root itself could not be used, so no observation of the source was carried out at
+    /// all. It is established before anything else can be, because there is no tree to look at.
+    /// </summary>
+    public static readonly FindingCode SourceRootUnusable = new("SOURCE_ROOT_UNUSABLE");
+
+    /// <summary>
     /// A source directory could not be enumerated, so what is inside it was never observed and the
     /// inventory is incomplete.
     /// </summary>
@@ -130,6 +136,7 @@ public static class WindowsPreflightFindingCodes
     /// </summary>
     public static readonly IReadOnlyList<FindingCode> All =
     [
+        SourceRootUnusable,
         SourceDirectoryEnumerationFailed,
         SourceEntryMetadataFailed,
         TargetPathInvalid,
