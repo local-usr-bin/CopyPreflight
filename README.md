@@ -50,6 +50,9 @@ CopyPreflight/
 ├─ README.md
 ├─ AGENTS.md                # 仓库级工程规范（面向后续开发 Agent）
 ├─ .gitignore
+├─ LICENSE                  # CopyPreflight 自有源码的 MIT 许可证
+├─ THIRD-PARTY-NOTICES.txt  # 随发布包分发的第三方组件声明
+├─ licenses/                # 随发布包分发的 .NET 运行时许可文本
 ├─ docs/
 │   ├─ PRODUCT_SPEC.md      # 产品定位、原则与范围
 │   ├─ ARCHITECTURE.md      # 高层职责边界
@@ -130,3 +133,11 @@ ZIP 与 SHA-256 生成方式、发布前检查清单见 [`docs/RELEASE.md`](docs
   publish 文件夹 + ZIP、可复现的发布与打包命令、版本如何进入二进制、发布前检查清单、
   使用说明、支持范围、首版能力与明确未实现的部分。
 - [`AGENTS.md`](AGENTS.md) — 后续开发需要遵守的仓库级工程规范。
+
+## 许可证
+
+**License: MIT**（见 [`LICENSE`](LICENSE)）。
+
+MIT 只覆盖 CopyPreflight 的**自有源码**。发布包是 self-contained 的，包内随附的 .NET runtime 与
+WPF / Windows Desktop runtime 组件**不属于**该许可证的覆盖范围，它们保留各自的许可证；相关声明与
+官方许可文本见发布包内的 `THIRD-PARTY-NOTICES.txt` 与 `licenses/`，说明见 [`docs/RELEASE.md`](docs/RELEASE.md)。

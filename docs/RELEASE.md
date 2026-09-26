@@ -101,6 +101,10 @@ CompanyName      CopyPreflight
 
 **运行时分发依赖不是脏东西，不要为了"看起来干净"手删。**
 
+上面这些说的是 `dotnet publish` 输出的内容。**发布包（ZIP）在它之上还会多出 4 个许可文件**：
+`LICENSE`、`THIRD-PARTY-NOTICES.txt`，以及 `licenses/` 下的两份文本。它们只存在于发布包里、不在 publish
+输出中，由 §5 的 staging 步骤从仓库根目录复制进去；来源与措辞见 §6.3。
+
 不应当存在，并且在本次发布中确实不存在的：`tests/` 与任何测试夹具、人工验收目录（`manual-*`）、`.git/`、
 `.workbuddy/`、`.codebuddy/`、`MEMORY.md` 或任何当日日志、任何 `*.cs` 源码、任何 `.csproj` / `.sln`、
 发布输出之外的开发缓存、Git 配置、用户真实路径或数据、secrets / token / session、构建日志、临时 probe 文件、
@@ -118,7 +122,7 @@ CompanyName      CopyPreflight
 | `*.pdb` / `*.cs` / `*.csproj` / `*.sln` / `*.log` / `*.tmp` | 0 |
 | 最大的三个文件 | `System.Private.CoreLib.dll` 16.0 MB、`PresentationFramework.dll` 15.8 MB、`PresentationCore.dll` 8.3 MB |
 
-**包体约 140 MiB 不是缺陷**：self-contained 发布必然携带整个 .NET 运行时。压缩成 ZIP 后是 60.25 MiB。
+**包体约 140 MiB 不是缺陷**：self-contained 发布必然携带整个 .NET 运行时。压缩成 ZIP 后是 60.27 MiB。
 
 数字会随 .NET SDK 补丁版本小幅变化；重跑时以自己那一次的输出为准。
 
@@ -137,20 +141,25 @@ powershell -NoProfile -Command "(Get-Item -LiteralPath artifacts\release\v0.1.0\
 
 ## 5. ZIP 与 SHA-256
 
-ZIP 从**最终的 publish folder** 生成，解压后是单一顶层目录，双击里面的
-`CopyPreflight.App.exe` 即可运行，**不需要任何安装脚本或第二步骤**。
+ZIP 由 **publish folder + §6.3 的许可文件**组成，解压后是单一顶层目录
+`CopyPreflight-0.1.0-win-x64/`，双击里面的 `CopyPreflight.App.exe` 即可运行，
+**不需要任何安装脚本或第二步骤**。
 
 ```bash
-# 1) staging：把 publish 内容放进一个名字干净、与版本一致的顶层目录
+# 1) staging：publish 内容 + 许可文件（§6.3）放进一个名字干净、与版本一致的顶层目录。
+#    先删掉旧 staging，保证结果只来自这一次打包。
 #    artifacts/release/v0.1.0/staging/CopyPreflight-0.1.0-win-x64/
-powershell -NoProfile -Command "Copy-Item -Path artifacts\release\v0.1.0\win-x64\publish\* -Destination artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64 -Recurse -Force"
+powershell -NoProfile -Command "Remove-Item -LiteralPath 'artifacts\release\v0.1.0\staging' -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Path 'artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64' -Force | Out-Null; Copy-Item -Path 'artifacts\release\v0.1.0\win-x64\publish\*' -Destination 'artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64' -Recurse -Force; Copy-Item -LiteralPath 'LICENSE' -Destination 'artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64' -Force; Copy-Item -LiteralPath 'THIRD-PARTY-NOTICES.txt' -Destination 'artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64' -Force; New-Item -ItemType Directory -Path 'artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64\licenses' -Force | Out-Null; Copy-Item -Path 'licenses\*' -Destination 'artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64\licenses' -Force"
 
-# 2) 压缩
-powershell -NoProfile -Command "Compress-Archive -Path artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64 -DestinationPath artifacts\release\v0.1.0\CopyPreflight-v0.1.0-win-x64.zip -CompressionLevel Optimal"
+# 2) 压缩（先删旧 ZIP，避免与上一次叠加）
+powershell -NoProfile -Command "Remove-Item -LiteralPath 'artifacts\release\v0.1.0\CopyPreflight-v0.1.0-win-x64.zip' -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'artifacts\release\v0.1.0\staging\CopyPreflight-0.1.0-win-x64' -DestinationPath 'artifacts\release\v0.1.0\CopyPreflight-v0.1.0-win-x64.zip' -CompressionLevel Optimal"
 
 # 3) 校验值
-powershell -NoProfile -Command "(Get-FileHash -LiteralPath artifacts\release\v0.1.0\CopyPreflight-v0.1.0-win-x64.zip -Algorithm SHA256).Hash"
+powershell -NoProfile -Command "(Get-FileHash -LiteralPath 'artifacts\release\v0.1.0\CopyPreflight-v0.1.0-win-x64.zip' -Algorithm SHA256).Hash"
 ```
+
+许可文件**不在 publish 输出里**（`dotnet publish` 不会产出它们），只由 staging 这一步从仓库根目录复制进去；
+它们的来源与措辞见 §6.3。
 
 `certutil -hashfile <zip> SHA256` 或 `sha256sum <zip>` 得到同一个值；随 ZIP 一并写出的
 `CopyPreflight-v0.1.0-win-x64.zip.sha256` 也是这个值。
@@ -160,24 +169,98 @@ powershell -NoProfile -Command "(Get-FileHash -LiteralPath artifacts\release\v0.
 | 项目 | 实测值 |
 | --- | --- |
 | ZIP 路径 | `artifacts/release/v0.1.0/CopyPreflight-v0.1.0-win-x64.zip` |
-| ZIP 大小 | **63,177,759 字节**（60.25 MiB） |
-| SHA-256 | `1CCA2BD7EDF065B50E5B928A7746E7CF9C94F5C51E3590C0838B57558F45A0A8` |
-| 解压后顶层 | 单一目录 `CopyPreflight-0.1.0-win-x64/`（401 个文件，146,542,305 字节） |
+| ZIP 大小 | **63,194,375 字节**（60.27 MiB） |
+| SHA-256 | `84556746F1D3ABDFBC7F2D893D894FC5F228DA64E938B01874D244175D0E2BE3` |
+| 解压后顶层 | 单一目录 `CopyPreflight-0.1.0-win-x64/`（405 个文件，146,625,303 字节） |
+| 其中随包许可文件 | 4 个（`LICENSE`、`THIRD-PARTY-NOTICES.txt`、`licenses/` 下 2 份），合计 82,998 字节 |
 | 解压可执行文件 | SHA-256 与 publish folder 中的 EXE **完全一致** |
+
+上一版（不含许可文件的）ZIP 是 63,177,759 字节 / SHA-256
+`1CCA2BD7EDF065B50E5B928A7746E7CF9C94F5C51E3590C0838B57558F45A0A8`；**该值已作废**，
+发布物以本节表格中的值为准。
 
 **publish 输出、staging 目录与 ZIP 都不进入版本库**（`artifacts/` 已被 `.gitignore` 忽略）。`artifacts/`
 整个目录可以随时删除，必要时按 §2 与本节重跑即可重建。
 
-## 6. 使用说明
+## 6. 许可证与第三方声明
 
-### 6.1 用途
+### 6.1 源码
+
+**CopyPreflight source code: MIT License.** 仓库根目录的 [`LICENSE`](../LICENSE) 是标准 MIT 全文，
+版权行为 `Copyright (c) 2026 local-usr-bin`。该许可证**只**覆盖 CopyPreflight 的自有源码。
+
+### 6.2 随包分发的二进制组件保留各自的许可证
+
+发布包是 **self-contained** 的，所以包内除三个 CopyPreflight 程序集之外，还携带 Microsoft 的运行时组件。
+它们不是 CopyPreflight 的一部分，也**不**适用上面那条 MIT：
+
+> **MIT applies to CopyPreflight source code only.**
+> **Bundled runtime components remain under their respective licenses.**
+
+| 组件 | 来自 | 在包内的代表文件 | 许可 |
+| --- | --- | --- | --- |
+| .NET runtime | NuGet 包 `Microsoft.NETCore.App.Runtime.win-x64` **10.0.12** | `coreclr.dll`、`System.Private.CoreLib.dll`、`hostfxr.dll`… | MIT |
+| Windows Desktop（WPF）runtime | NuGet 包 `Microsoft.WindowsDesktop.App.Runtime.win-x64` **10.0.12** | `PresentationFramework.dll`、`PresentationCore.dll`、`WindowsBase.dll`、`wpfgfx_cor3.dll`… | MIT |
+| 上述运行时内含的第三方组件 | 随 .NET runtime 一并分发 | — | 各自许可证，见包内 `THIRD-PARTY-NOTICES.txt` |
+
+两个 runtime 包的 NuGet 元数据都声明 `<license type="expression">MIT</license>`，包内另带各自的
+`LICENSE` / `LICENSE.TXT` 文本（即 §6.3 里那两份）。
+
+**不要**把这个包描述成"整包都是 MIT"或"全部内容均为 MIT"。runtime 的分发有自己的许可与声明，
+包内为此单独带了 `THIRD-PARTY-NOTICES.txt` 与 `licenses/`。
+
+### 6.3 发布包里的许可文件
+
+| 文件（ZIP 内） | 内容 | 逐字来源 |
+| --- | --- | --- |
+| `LICENSE` | CopyPreflight 自有源码的 MIT 全文 | 仓库 [`LICENSE`](../LICENSE) |
+| `THIRD-PARTY-NOTICES.txt` | Microsoft 随 .NET runtime 分发的第三方声明 | `Microsoft.NETCore.App.Runtime.win-x64` 10.0.12 包内的 `THIRD-PARTY-NOTICES.TXT` |
+| `licenses/DOTNET-RUNTIME-LICENSE.txt` | .NET runtime 的 MIT 全文 | `Microsoft.NETCore.App.Runtime.win-x64` 10.0.12 包内的 `LICENSE.TXT` |
+| `licenses/WINDOWSDESKTOP-RUNTIME-LICENSE.txt` | Windows Desktop runtime 的 MIT 全文 | `Microsoft.WindowsDesktop.App.Runtime.win-x64` 10.0.12 包内的 `LICENSE` |
+
+四个文件的校验值（SHA-256）。两份 runtime 许可的哈希与它们在 NuGet 包内的**原始文件完全相同**，
+可以直接用来确认这些文本没有被改动过：
+
+| 文件 | SHA-256 | 与上游原始文件 |
+| --- | --- | --- |
+| `LICENSE` | `81F7BDA5D100ABB14AA0929B3AD11E9248B3E417F9DABD7E6D2904B8D440A551` | 本仓库自有，无上游 |
+| `THIRD-PARTY-NOTICES.txt` | `0D3DAC08528E933E130E432FF7A3FCA7ABE3C0DA80D81A90FB00B318DF13C54F` | 正文逐字相同（前缀是本仓库自写的来源说明） |
+| `licenses/DOTNET-RUNTIME-LICENSE.txt` | `D7A68596AB69B06F51CA278A6545148E4269A9381C26D597C13DF5D88E08CF5B` | 完全相同 |
+| `licenses/WINDOWSDESKTOP-RUNTIME-LICENSE.txt` | `A89886665765362EB77E0F8E26602C924520041D1711B2EEDC136434FE4D01AB` | 完全相同 |
+
+这几个文本文件在仓库里按 `core.autocrlf=true` 的既有约定以 **CRLF** 落地（本仓库有意不加
+`.gitattributes`），与 `git clone` 后 checkout 出来的字节一致，因此从 clean clone 重跑打包会得到相同的
+文本字节。`THIRD-PARTY-NOTICES.txt` 里微软正文的行尾本来就是 CRLF，逐字复制后没有被改动过。
+
+`THIRD-PARTY-NOTICES.txt` 的**正文是逐字复制、未改动的**；文件开头那段来源说明是本仓库自己写的
+（说明它取自哪个包、覆盖哪些组件），它不是许可文本，也不改变正文。仓库根目录的
+[`THIRD-PARTY-NOTICES.txt`](../THIRD-PARTY-NOTICES.txt) 与 [`licenses/`](../licenses) 就是这三个随包文件的源头：
+打包时**直接复制**进 staging（见 §5），不重新生成、不改写。
+
+**别把 SDK 的许可文本当成这个包的 runtime 许可。** 本机 `C:\Program Files\dotnet\LICENSE.txt` 是
+**.NET SDK 安装器**的 "MICROSOFT .NET LIBRARY" 条款（含 Distributable Code 条款），适用于 SDK，
+**不是**本包携带的那两个 runtime 包的许可。本包的 runtime 来自上面两个 NuGet 包，其包内文本才是随包分发的许可。
+
+### 6.4 已知边界（这部分**需要人工确认**，不要由构建流程推断）
+
+- 包内**没有** Windows SDK 组件，因此**没有**、也不应该有一份 "Windows SDK" 许可文本。
+- Windows Desktop runtime 包**自身不带**第三方 notices 文件。本仓库只逐字复制 Microsoft 实际提供的那一份，
+  **不补写、不合并、不推断**。因此 `THIRD-PARTY-NOTICES.txt` 反映的是 .NET runtime 包所携带声明的范围，
+  而不是对包内每个本地组件逐一作出的覆盖结论——例如 `D3DCompiler_47_cor3.dll`、`vcruntime140_cor3.dll`、
+  `Microsoft.DiaSymReader.Native.amd64.dll` **没有**在这份文本里被点名（.NET SDK 的 `ThirdPartyNotices.txt`
+  同样没有）。若将来需要更完整的第三方声明，来源应由人工决定。
+- 本仓库**不编写、不改写任何许可文本**。许可文件只做逐字复制。
+
+## 7. 使用说明
+
+### 7.1 用途
 
 CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**。它回答的是：
 "把源文件夹里的这些内容搬到目标文件夹，有哪些已知的、会拦住或影响这次搬迁的问题。"
 
 **它不是复制软件，也不代替你的复制工具。** 迁移怎么做、用什么工具做，仍由你决定。
 
-### 6.2 基本使用
+### 7.2 基本使用
 
 1. 选 **Source folder**（源文件夹）——你要搬走的内容所在的目录。
 2. 选 **Target folder**（目标文件夹）——你打算搬到的目录。
@@ -189,7 +272,7 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 **目标文件夹本身就是这次迁移的目标根目录**，不会在目标下再套一层以源目录命名的文件夹。
 两个路径都必须是完整路径；相对路径不会被解析成"相对于程序启动的目录"。
 
-### 6.3 核心安全边界（v0.1 不可协商）
+### 7.3 核心安全边界（v0.1 不可协商）
 
 - **不复制**
 - **不移动**
@@ -203,7 +286,7 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 
 整个过程对源与目标是**只读**的。
 
-### 6.4 结论怎么读
+### 7.4 结论怎么读
 
 检查跑完且没有发现阻塞问题时，界面显示的是：
 
@@ -213,7 +296,7 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 目标的某些能力可能仍是 Unknown，运行时状态（权限、占用、网络、磁盘故障）会变，
 复制程序的行为也可能与本工具的假设不同。
 
-### 6.5 Error / Warning / Info 的实际含义
+### 7.5 Error / Warning / Info 的实际含义
 
 | 级别 | 含义 |
 | --- | --- |
@@ -223,7 +306,7 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 
 覆盖情况与结论**并列显示**，不会被结论掩盖：某个阶段"未执行"或"未完成"会单独写出来。
 
-## 7. 首版能力概览
+## 8. 首版能力概览
 
 - **源侧清单（source inventory）**：递归观察源目录，给出文件数、目录数、reparse point 计数与逻辑总字节数，
   以及无法读取 / 无法枚举的部位。
@@ -238,7 +321,7 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 - **文件与目录的结构冲突**：目标位置上挡路的普通文件、类型不匹配等会被区分报告。
 - **覆盖情况与 Unknown 报告**：运行状态、实际覆盖、风险三个维度分开呈现；未执行与"执行了但没发现"始终是两件事。
 
-## 8. 首版未实现 / 已知限制
+## 9. 首版未实现 / 已知限制
 
 - **不做实际复制或移动**，也不执行任何 overwrite / skip 策略——工具只报告，不决定重名时怎么办。
 - **不做 symlink / junction 的精确解析**：只记录遇到了 reparse point 以及保守的边界，不还原其指向。
@@ -253,7 +336,7 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)、[`RULES.md`](RULES.md) 与 [`WORKFLOW_UI.md`](WORKFLOW_UI.md) 里，
 这里只列用户需要知道的那些。
 
-## 9. 支持范围与措辞
+## 10. 支持范围与措辞
 
 - **平台**：Windows **x64**。本包是 `win-x64` 的 self-contained 包，**不需要**目标机器预装 .NET 10 runtime。
 - **操作系统版本仍然要落在 .NET 10 的支持范围内。** self-contained 只解决"运行时从哪里来"，
@@ -270,9 +353,9 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 > been independently certified.*
 
 - **不要**把这理解成"兼容所有 Windows 10 / 11"：本项目没有、也不能在没有多 OS 实测的情况下作出这种声明。
-- 本机已经装有 .NET SDK，所以"在本机启动成功"**不等于**论证了"完全没有 .NET 环境的机器也能启动"（见 §11）。
+- 本机已经装有 .NET SDK，所以"在本机启动成功"**不等于**论证了"完全没有 .NET 环境的机器也能启动"（见 §12）。
 
-## 10. 发布前检查清单
+## 11. 发布前检查清单
 
 1. `git status` 干净，HEAD 是预期基线，`git remote -v` 为空（v0.1 不建 remote、不 push）。
 2. `dotnet build CopyPreflight.sln -c Release` → 0 警告 / 0 错误。
@@ -282,12 +365,14 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 5. 按 §4.3 审计发布内容：无源码 / 测试 / PDB / 日志 / 私密文件；数量与大小与本文件记录的同一量级。
 6. 确认发布版 EXE 的 `FileVersion` 是 `0.1.0.0`、`ProductVersion` 是 `0.1.0`（§3）。
 7. 从 **publish 目录**（不是 `bin\Debug` / `bin\Release` 的普通 build 产物）启动一次 EXE：
-   窗口能创建、能正常关闭、退出码为 0（§11 记录了本次做法与证据边界）。
+   窗口能创建、能正常关闭、退出码为 0（§12 记录了本次做法与证据边界）。
 8. 用仓库内自有的小型夹具跑一次正常检查，以及一次"目标已存在同名文件"的检查（应当得到 Warning）。
 9. 生成 ZIP 与 SHA-256（§5），确认解压结构与 EXE 哈希与 publish 一致。
-10. 确认 ZIP / publish 输出没有被 `git status` 看到。
+10. 确认 ZIP 顶层含 `LICENSE`、`THIRD-PARTY-NOTICES.txt` 与 `licenses/`，且这三处文本与仓库中的同名文件
+    **逐字节一致**（§6.3）；全包措辞中不要出现"整包都是 MIT"这类说法。
+11. 确认 ZIP / publish 输出没有被 `git status` 看到。
 
-## 11. 证据边界（不要把其中一类说成另一类）
+## 12. 证据边界（不要把其中一类说成另一类）
 
 本次 M9 完成的发布版运行验证：
 
@@ -299,11 +384,14 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 | 用"目标已存在同名文件"的夹具跑真实检查 | 得到 1 条 **Warning**：`TARGET_EXISTING_FILE_COLLISION` |
 | 检查前后对比夹具状态 | 目标目录没有任何新增 / 修改 / 删除：空目标仍为空，已有文件内容未被触碰 |
 
+发布物加上许可文件、ZIP 重新生成之后，上面这几项**在原夹具上重新跑过一次**，结论相同；
+解压出的 `LICENSE` / `THIRD-PARTY-NOTICES.txt` / `licenses/` 也与仓库中的同名文件逐字节一致（§6.3）。
+
 上面第 3、4 项是通过一个**临时驱动**调用**发布目录里的程序集**完成的（该驱动只存在于被忽略的
 `artifacts/` 下，不属于仓库，也不参与构建）；驱动启动时会打印所加载程序集的 SHA-256，
 实测与发布目录中的同名文件**逐字节一致**，因此这三项验证针对的是真正被打包的那份二进制。
 界面上的**手工点击**（点击 Browse、敲路径、点 Start check、看列表滚动）仍然**未**在自动化环境中执行——
-无法在没有 UI 自动化框架、也不允许安装的前提下模拟。**这一部分留给最终用户在独立环境完成**（§12）。
+无法在没有 UI 自动化框架、也不允许安装的前提下模拟。**这一部分留给最终用户在独立环境完成**（§13）。
 
 另外必须说清楚的两件事：
 
@@ -313,9 +401,9 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
   而不是 framework reference）证明**这个包是按 self-contained 模式生成的**——这就是本项目能给出的证据强度。
 - **发布期的写与运行期的写是两件事。** 生成 publish 输出、staging 与 ZIP 当然会写磁盘，写的是仓库内的
   `artifacts/release/`，那是构建产物；这与"运行时向用户的 Source / Target 写东西"是完全不同的两件事，
-  后者在本项目中依然是被禁止的（§6.3）。
+  后者在本项目中依然是被禁止的（§7.3）。
 
-## 12. 最终用户在独立环境的最短验收步骤
+## 13. 最终用户在独立环境的最短验收步骤
 
 把 `CopyPreflight-v0.1.0-win-x64.zip` 复制到一台**没有本项目开发环境**的 Windows x64 机器上：
 
@@ -328,10 +416,12 @@ CopyPreflight v0.1.0 是一个 **Windows 文件迁移前的只读预检工具**�
 
 任何一步与上述不符，请记录：Windows 版本（`winver`）、第几步、界面上的原文，以及 ZIP 的 SHA-256。
 
-## 13. 相关文档
+## 14. 相关文档
 
 - 产品定位、冻结原则、Severity 定义、v0.1 范围内与范围外：[`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)
 - 高层职责边界与依赖方向：[`ARCHITECTURE.md`](ARCHITECTURE.md)
 - 各层自身契约：[`SCANNER.md`](SCANNER.md)、[`TARGET_PROBING.md`](TARGET_PROBING.md)、[`RULES.md`](RULES.md)
 - 检查编排与界面行为、验证证据分类：[`WORKFLOW_UI.md`](WORKFLOW_UI.md)
+- 源码许可证：[`LICENSE`](../LICENSE)；随包第三方声明：[`THIRD-PARTY-NOTICES.txt`](../THIRD-PARTY-NOTICES.txt)
+  与 [`licenses/`](../licenses)
 - 仓库级工程规范：[`AGENTS.md`](../AGENTS.md)
